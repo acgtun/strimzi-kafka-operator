@@ -84,6 +84,29 @@ public class KubernetesRestartEventPublisher {
     }
 
     /**
+     * Publishes a Kubernetes Event about the cluster custom resource being reconciled, for example when nodes are
+     * excluded from or again included in automatic rolling updates.
+     *
+     * @param reconciliation    Reconciliation marker identifying the custom resource the event is about
+     * @param action            The action which is being taken by the operator
+     * @param reason            The reason for the event in PascalCase
+     * @param type              The type of the Kubernetes event: "Normal", or "Warning"
+     * @param note              The note to attach to the event
+     */
+    public void publishClusterEvent(Reconciliation reconciliation, String action, String reason, String type, String note) {
+        MicroTime k8sEventTime = new MicroTime(K8S_MICROTIME.format(ZonedDateTime.now(clock)));
+        ObjectReference resourceReference = createResourceReference(reconciliation);
+
+        try {
+            LOG.debug("Publishing K8s event, time={}, type={}, reason={}, note={}, resource={}",
+                    k8sEventTime, type, reason, note, resourceReference);
+            createAndPublishEvent(k8sEventTime, resourceReference, null, action, reason, type, maybeTruncated(note));
+        } catch (Exception e) {
+            LOG.error("Exception on K8s event publication", e);
+        }
+    }
+
+    /**
      * Publish a Kubernetes Event referring to certain KafkaRoller pod action
      *
      * @param eventTime         - Microtime to use for event
@@ -94,12 +117,16 @@ public class KubernetesRestartEventPublisher {
      * @param note              - the note to attach to the event
      */
     protected void publishEvent(MicroTime eventTime, ObjectReference resourceReference, ObjectReference podReference, String reason, String type, String note) {
+        createAndPublishEvent(eventTime, resourceReference, podReference, ACTION, reason, type, note);
+    }
+
+    private void createAndPublishEvent(MicroTime eventTime, ObjectReference resourceReference, ObjectReference podReference, String action, String reason, String type, String note) {
         EventBuilder builder = new EventBuilder();
 
         builder.withNewMetadata()
                 .withGenerateName("strimzi-event")
                 .endMetadata()
-                .withAction(ACTION)
+                .withAction(action)
                 .withReportingController(CONTROLLER)
                 .withReportingInstance(operatorName)
                 .withRegarding(resourceReference)
@@ -109,7 +136,7 @@ public class KubernetesRestartEventPublisher {
                 .withEventTime(eventTime)
                 .withNote(note);
 
-        client.events().v1().events().inNamespace(podReference.getNamespace()).resource(builder.build()).create();
+        client.events().v1().events().inNamespace(resourceReference.getNamespace()).resource(builder.build()).create();
     }
 
     ObjectReference createPodReference(Pod pod) {
