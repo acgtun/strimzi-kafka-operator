@@ -78,6 +78,7 @@ public class CaReconciler {
 
     /* test */ final Reconciliation reconciliation;
     private final long operationTimeoutMs;
+    private final long offlineLogDirRestartCooldownMs;
 
     /* test */ final DeploymentOperator deploymentOperator;
     private final StrimziPodSetOperator strimziPodSetOperator;
@@ -130,6 +131,7 @@ public class CaReconciler {
     ) {
         this.reconciliation = reconciliation;
         this.operationTimeoutMs = config.getOperationTimeoutMs();
+        this.offlineLogDirRestartCooldownMs = config.getOfflineLogDirRestartCooldownMs();
 
         this.deploymentOperator = supplier.deploymentOperations;
         this.strimziPodSetOperator = supplier.strimziPodSetOperator;
@@ -552,7 +554,8 @@ public class CaReconciler {
                 brokerId -> null,
                 null,
                 false,
-                eventPublisher);
+                eventPublisher,
+                offlineLogDirRestartCooldownMs);
     }
 
     /**

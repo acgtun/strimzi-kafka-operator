@@ -260,6 +260,12 @@ public class ClusterOperatorConfig {
     public static final ConfigParameter<Boolean> ENTITY_OPERATOR_WATCHED_NAMESPACE_ENABLED = new ConfigParameter<>("STRIMZI_ENTITY_OPERATOR_WATCHED_NAMESPACE_ENABLED", BOOLEAN, "false", CONFIG_VALUES);
 
     /**
+     * Cooldown period in milliseconds before restarting a broker again for offline log directories.
+     * Prevents infinite restart loops when offline dirs are caused by permanent hardware failure.
+     */
+    public static final ConfigParameter<Long> OFFLINE_LOG_DIR_RESTART_COOLDOWN_MS = new ConfigParameter<>("STRIMZI_OFFLINE_LOG_DIR_RESTART_COOLDOWN_MS", LONG, "1800000", CONFIG_VALUES);
+
+    /**
      * The configured Kafka versions
      */
     private final KafkaVersion.Lookup versions;
@@ -656,6 +662,15 @@ public class ClusterOperatorConfig {
         return get(ENTITY_OPERATOR_WATCHED_NAMESPACE_ENABLED);
     }
 
+    /**
+     * Gets the cooldown period in milliseconds before restarting a broker again for offline log directories.
+     *
+     * @return  cooldown in milliseconds
+     */
+    public long getOfflineLogDirRestartCooldownMs() {
+        return get(OFFLINE_LOG_DIR_RESTART_COOLDOWN_MS);
+    }
+
     @Override
     public String toString() {
         return "ClusterOperatorConfig{" +
@@ -680,6 +695,7 @@ public class ClusterOperatorConfig {
                 "\n\tpodDisruptionBudgetGeneration=" + isPodDisruptionBudgetGeneration() + '\'' +
                 "\n\tisPkcs12KeystoreGeneration='" + isPkcs12KeystoreGeneration() +
                 "\n\tisEntityOperatorWatchedNamespaceEnabled='" + isEntityOperatorWatchedNamespaceEnabled() +
+                "\n\tofflineLogDirRestartCooldownMs=" + getOfflineLogDirRestartCooldownMs() +
                 "}";
     }
 }
