@@ -12,6 +12,7 @@ import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.rbac.ClusterRoleBinding;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.readiness.Readiness;
 import io.strimzi.api.kafka.model.common.Condition;
 import io.strimzi.api.kafka.model.kafka.Kafka;
 import io.strimzi.api.kafka.model.kafka.KafkaResources;
@@ -42,6 +43,7 @@ import io.strimzi.operator.cluster.model.KafkaPool;
 import io.strimzi.operator.cluster.model.ListenersUtils;
 import io.strimzi.operator.cluster.model.MetricsAndLogging;
 import io.strimzi.operator.cluster.model.NodeRef;
+import io.strimzi.operator.cluster.model.PodRevision;
 import io.strimzi.operator.cluster.model.PodSetUtils;
 import io.strimzi.operator.cluster.model.RestartReason;
 import io.strimzi.operator.cluster.model.RestartReasons;
@@ -988,7 +990,72 @@ public class KafkaReconciler {
                         kafka.generatePodSets(imagePullPolicy, imagePullSecrets, this::podSetPodAnnotations),
                         kafka.getSelectorLabels()
                 ))
+                .compose(podSetDiff -> waitForPodScheduling(podSetDiff).map(podSetDiff))
                 .compose(podSetDiff -> waitForNewNodes().map(podSetDiff));
+    }
+
+    /**
+     * Scheduling barrier: waits until every pod desired by the StrimziPodSets exists and is scheduled
+     * (has spec.nodeName set) before the rolling update is allowed to delete any pod. Deleting a pod while other
+     * desired pods are still unscheduled opens a window in which an unscheduled pod can be placed on the node of the
+     * deleted pod. With node-pinned local storage the deleted pod's replacement then stays Pending forever.
+     *
+     * Unlike the addedNodes()-based readiness wait, this barrier is derived purely from the observed pod state, so it
+     * also covers pods created by a previous, failed reconciliation.
+     *
+     * Unscheduled pods with an outdated revision are exempt: the roll itself may be the remedy for their state, and
+     * deleting an unscheduled pod vacates no node so it cannot open the race window.
+     *
+     * @param podSetDiffs   Map with the PodSet reconciliation results holding the desired pods
+     *
+     * @return  Future that completes when all desired pods are scheduled (or exempt)
+     */
+    private Future<Void> waitForPodScheduling(Map<String, ReconcileResult<StrimziPodSet>> podSetDiffs) {
+        List<Future<Void>> podFutures = new ArrayList<>();
+
+        for (ReconcileResult<StrimziPodSet> podSetDiff : podSetDiffs.values()) {
+            // Deleted PodSets (removed node pools) have no resource and desire no pods
+            for (Pod desiredPod : PodSetUtils.podSetToPods(podSetDiff.resourceOpt().orElse(null))) {
+                String podName = desiredPod.getMetadata().getName();
+                String desiredRevision = Annotations.stringAnnotation(desiredPod, PodRevision.STRIMZI_REVISION_ANNOTATION, null);
+
+                podFutures.add(VertxUtil.toFuture(podOperator
+                        .waitFor(reconciliation, reconciliation.namespace(), podName, "scheduled", 1_000, operationTimeoutMs,
+                                (namespace, name) -> isScheduledOrExemptFromSchedulingBarrier(namespace, name, desiredRevision))));
+            }
+        }
+
+        return Future.join(podFutures).mapEmpty();
+    }
+
+    /**
+     * Checks whether a desired pod satisfies the scheduling barrier: it exists and is scheduled, or it is exempt
+     * because it is unscheduled with an outdated revision and will be deleted by the roll anyway.
+     *
+     * @param namespace         Namespace of the pod
+     * @param podName           Name of the pod
+     * @param desiredRevision   Revision of the pod desired by the StrimziPodSet
+     *
+     * @return  True if the pod passes the scheduling barrier
+     */
+    private boolean isScheduledOrExemptFromSchedulingBarrier(String namespace, String podName, String desiredRevision) {
+        Pod pod = podOperator.get(namespace, podName);
+
+        if (pod == null) {
+            // The pod was not created yet => we have to wait for it to exist and get scheduled
+            return false;
+        } else if (pod.getSpec() != null && pod.getSpec().getNodeName() != null && !pod.getSpec().getNodeName().isEmpty()) {
+            // The pod is scheduled to a node
+            return true;
+        } else if (Readiness.isPodReady(pod)) {
+            // A ready pod is by definition scheduled (covers environments which do not set spec.nodeName)
+            return true;
+        } else {
+            // The pod exists but is not scheduled. If it has an outdated revision, KafkaRoller will delete and
+            // recreate it anyway and deleting an unscheduled pod vacates no node => it is exempt from the barrier.
+            String currentRevision = Annotations.stringAnnotation(pod, PodRevision.STRIMZI_REVISION_ANNOTATION, null);
+            return desiredRevision != null && !desiredRevision.equals(currentRevision);
+        }
     }
 
     /**
