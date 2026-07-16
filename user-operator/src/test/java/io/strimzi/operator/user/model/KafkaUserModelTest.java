@@ -39,7 +39,6 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import static java.util.Collections.emptyMap;
 import static java.util.Collections.singletonMap;
 import static org.hamcrest.CoreMatchers.hasItem;
 import static org.hamcrest.CoreMatchers.is;
@@ -175,7 +174,7 @@ public class KafkaUserModelTest {
 
         assertThat(generatedSecret.getMetadata().getName(), is(ResourceUtils.NAME));
         assertThat(generatedSecret.getMetadata().getNamespace(), is(ResourceUtils.NAMESPACE));
-        assertThat(generatedSecret.getMetadata().getAnnotations(), is(emptyMap()));
+        assertThat(generatedSecret.getMetadata().getAnnotations(), hasEntry(KafkaUserModel.ANNO_STRIMZI_IO_KAFKA_USERNAME, ResourceUtils.NAME));
         assertThat(generatedSecret.getMetadata().getLabels(),
                 is(Labels.fromMap(ResourceUtils.LABELS)
                         .withStrimziKind(KafkaUser.RESOURCE_KIND)
@@ -877,7 +876,7 @@ public class KafkaUserModelTest {
 
         KafkaUserModel model = KafkaUserModel.fromCrd(userWithCustomUsername, UserOperatorConfig.SECRET_PREFIX.defaultValue(), Boolean.parseBoolean(UserOperatorConfig.ACLS_ADMIN_API_SUPPORTED.defaultValue()));
         model.maybeGeneratePassword(Reconciliation.DUMMY_RECONCILIATION, passwordGenerator, null, null);
-        Secret generatedSecret = model.generateSecret();
+        Secret generatedSecret = model.generateSecret(true);
 
         assertThat(generatedSecret.getMetadata().getAnnotations(), hasEntry(KafkaUserModel.ANNO_STRIMZI_IO_KAFKA_USERNAME, "custom-kafka-user"));
         assertThat(generatedSecret.getMetadata().getName(), is(ResourceUtils.NAME));
@@ -893,7 +892,7 @@ public class KafkaUserModelTest {
 
         KafkaUserModel model = KafkaUserModel.fromCrd(userWithCustomUsername, UserOperatorConfig.SECRET_PREFIX.defaultValue(), Boolean.parseBoolean(UserOperatorConfig.ACLS_ADMIN_API_SUPPORTED.defaultValue()));
         model.maybeGeneratePassword(Reconciliation.DUMMY_RECONCILIATION, passwordGenerator, null, null);
-        Secret generatedSecret = model.generateSecret();
+        Secret generatedSecret = model.generateSecret(true);
 
         String password = "aaaaaaaaaa";
         assertThat(Util.decodeFromBase64(generatedSecret.getData().get(KafkaUserModel.KEY_SASL_JAAS_CONFIG)),

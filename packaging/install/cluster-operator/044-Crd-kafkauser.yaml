@@ -57,6 +57,9 @@ spec:
           spec:
             type: object
             properties:
+              username:
+                type: string
+                description: "The name of the Kafka user. When absent this will default to the metadata.name of the KafkaUser resource. The username is used as the Kafka principal for ACLs, quotas, and SCRAM-SHA credentials. For TLS authentication, it is used as the Common Name (CN) in the certificate. Setting this field allows multiple KafkaUser resources in the same namespace to create users with the same Kafka username on different Kafka clusters."
               authentication:
                 type: object
                 properties:

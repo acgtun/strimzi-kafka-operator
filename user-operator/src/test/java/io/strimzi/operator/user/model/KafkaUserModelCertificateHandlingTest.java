@@ -204,7 +204,7 @@ public class KafkaUserModelCertificateHandlingTest {
         public int generateNewCertificateCalled = 0;
 
         protected MockKafkaUserModel() {
-            super(ResourceUtils.NAMESPACE, ResourceUtils.NAME, Labels.EMPTY, null);
+            super(ResourceUtils.NAMESPACE, ResourceUtils.NAME, ResourceUtils.NAME, Labels.EMPTY, null);
             this.authentication = new KafkaUserTlsClientAuthentication();
         }
 

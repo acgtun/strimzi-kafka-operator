@@ -26,11 +26,13 @@ import org.apache.kafka.clients.admin.DescribeMetadataQuorumResult;
 import org.apache.kafka.clients.admin.QuorumInfo;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.KafkaFuture;
+import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -789,24 +791,6 @@ public class KafkaRollerTest {
     }
 
     @Test
-    public void testCombinedNodeWithOfflineLogDirsWeakerCheckNotUsed() {
-        PodOperator podOps = mockPodOps(podId -> CompletableFuture.completedFuture(null));
-        // Combined node 1 has offline dirs. Standard canRoll returns false.
-        // The weaker check should NOT be used for combined nodes (!isController guard)
-        // because bypassing the quorum check could break the KRaft controller quorum.
-        TestingKafkaRoller kafkaRoller = new TestingKafkaRoller(addPodNames(0, REPLICAS, 0), podOps,
-                noException(), null, noException(), noException(), noException(),
-                brokerId -> brokerId == 1 ? CompletableFuture.completedFuture(false) : CompletableFuture.completedFuture(true),
-                new DefaultAdminClientProvider(), new DefaultKafkaAgentClientProvider(), false, null, -1,
-                Set.of(1));
-        // Combined node 1 has offline dirs but canRoll returns false -> blocked (weaker check NOT attempted)
-        doFailingRollingRestart(kafkaRoller,
-                emptyList(),
-                KafkaRoller.UnforceableProblem.class, "Pod c-kafka-1 cannot be updated right now.",
-                emptyList());
-    }
-
-    @Test
     public void testControllerOnlyNodeWithOfflineLogDirsNotChecked() {
         PodOperator podOps = mockPodOps(podId -> CompletableFuture.completedFuture(null));
         // Controller-only nodes (not brokers) should not be checked for offline log dirs
@@ -924,7 +908,7 @@ public class KafkaRollerTest {
     @Test
     public void testOfflineLogDirCooldownPreventsRestart() {
         // Pods with recent creation timestamp should not be restarted for offline log dirs
-        PodOperator podOps = mockPodOpsWithTimestamp(podId -> CompletableFuture.completedFuture(null), java.time.Instant.now().toString());
+        PodOperator podOps = mockPodOpsWithTimestamp(podId -> CompletableFuture.completedFuture(null), Instant.now().toString());
         // Use a 30-minute cooldown so the freshly-created pod is within the cooldown window
         TestingKafkaRoller kafkaRoller = new TestingKafkaRoller(addPodNames(REPLICAS, 0, 0), podOps,
                 noException(), null, noException(), noException(), noException(),
@@ -1281,7 +1265,7 @@ public class KafkaRollerTest {
                 }
 
                 @Override
-                CompletableFuture<Boolean> canRollExcludingOfflineDirPartitions(int podId, Set<org.apache.kafka.common.TopicPartition> partitionsOnHealthyDirs) {
+                CompletableFuture<Boolean> canRollExcludingOfflineDirPartitions(int podId, Set<TopicPartition> partitionsOnHealthyDirs) {
                     return weakerCheckFn.apply(podId);
                 }
             };

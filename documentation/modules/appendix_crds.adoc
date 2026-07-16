@@ -2654,6 +2654,9 @@ Used in: xref:type-KafkaUser-{context}[`KafkaUser`]
 [cols="2,2,3a",options="header"]
 |====
 |Property |Property type |Description
+|username
+|string
+|The name of the Kafka user. When absent this will default to the metadata.name of the KafkaUser resource. The username is used as the Kafka principal for ACLs, quotas, and SCRAM-SHA credentials. For TLS authentication, it is used as the Common Name (CN) in the certificate. Setting this field allows multiple KafkaUser resources in the same namespace to create users with the same Kafka username on different Kafka clusters.
 |authentication
 |xref:type-KafkaUserTlsClientAuthentication-{context}[`KafkaUserTlsClientAuthentication`], xref:type-KafkaUserTlsExternalClientAuthentication-{context}[`KafkaUserTlsExternalClientAuthentication`], xref:type-KafkaUserScramSha512ClientAuthentication-{context}[`KafkaUserScramSha512ClientAuthentication`]
 |Authentication mechanism enabled for this Kafka user. The supported authentication mechanisms are `scram-sha-512`, `tls`, and `tls-external`. 
