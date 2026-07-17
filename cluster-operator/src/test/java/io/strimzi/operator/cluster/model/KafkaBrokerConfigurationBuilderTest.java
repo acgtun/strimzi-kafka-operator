@@ -20,6 +20,8 @@ import io.strimzi.api.kafka.model.kafka.listener.GenericKafkaListenerBuilder;
 import io.strimzi.api.kafka.model.kafka.listener.GenericKafkaListenerConfigurationBroker;
 import io.strimzi.api.kafka.model.kafka.listener.GenericKafkaListenerConfigurationBrokerBuilder;
 import io.strimzi.api.kafka.model.kafka.listener.KafkaListenerType;
+import io.strimzi.api.kafka.model.kafka.quotas.QuotasPluginCustom;
+import io.strimzi.api.kafka.model.kafka.quotas.QuotasPluginCustomBuilder;
 import io.strimzi.api.kafka.model.kafka.quotas.QuotasPluginKafka;
 import io.strimzi.api.kafka.model.kafka.quotas.QuotasPluginKafkaBuilder;
 import io.strimzi.api.kafka.model.kafka.quotas.QuotasPluginStrimzi;
@@ -1927,6 +1929,49 @@ public class KafkaBrokerConfigurationBuilderTest {
 
         assertThat(configuration, not(containsString("client.quota.callback.class")));
         assertThat(configuration, not(containsString("client.quota.callback.static")));
+    }
+
+    @Test
+    public void testWithCustomQuotas() {
+        QuotasPluginCustom quotasPluginCustom = new QuotasPluginCustomBuilder()
+            .withQuotaCallbackClass("com.example.kafka.quotas.MyQuotaCallback")
+            .withKafkaAdminClientConfigPrefix("com.example.quotas.kafka.admin")
+            .withConfig(Map.of(
+                "com.example.quotas.storage.check.interval", "30000",
+                "com.example.quotas.limit.ratio", 0.05))
+            .build();
+
+        String configuration = new KafkaBrokerConfigurationBuilder(Reconciliation.DUMMY_RECONCILIATION, NODE_REF)
+            .withQuotas("my-personal-cluster", quotasPluginCustom)
+            .build();
+
+        assertThat(configuration, isEquivalent("node.id=2",
+            "client.quota.callback.class=com.example.kafka.quotas.MyQuotaCallback",
+            "com.example.quotas.kafka.admin.bootstrap.servers=my-personal-cluster-kafka-brokers:9091",
+            "com.example.quotas.kafka.admin.security.protocol=SSL",
+            "com.example.quotas.kafka.admin.ssl.keystore.certificate.chain=${strimzisecrets:namespace/my-cluster-kafka-2:my-cluster-kafka-2.crt}",
+            "com.example.quotas.kafka.admin.ssl.keystore.key=${strimzisecrets:namespace/my-cluster-kafka-2:my-cluster-kafka-2.key}",
+            "com.example.quotas.kafka.admin.ssl.keystore.type=PEM",
+            "com.example.quotas.kafka.admin.ssl.truststore.certificates=${strimzisecrets:namespace/my-personal-cluster-trustbundle:cluster-ca.crt}",
+            "com.example.quotas.kafka.admin.ssl.truststore.type=PEM",
+            "com.example.quotas.storage.check.interval=30000",
+            "com.example.quotas.limit.ratio=0.05"
+        ));
+    }
+
+    @Test
+    public void testWithCustomQuotasWithoutAdminClientConfig() {
+        QuotasPluginCustom quotasPluginCustom = new QuotasPluginCustomBuilder()
+            .withQuotaCallbackClass("com.example.kafka.quotas.MyQuotaCallback")
+            .build();
+
+        String configuration = new KafkaBrokerConfigurationBuilder(Reconciliation.DUMMY_RECONCILIATION, NODE_REF)
+            .withQuotas("my-personal-cluster", quotasPluginCustom)
+            .build();
+
+        assertThat(configuration, isEquivalent("node.id=2",
+            "client.quota.callback.class=com.example.kafka.quotas.MyQuotaCallback"
+        ));
     }
 
     @Test

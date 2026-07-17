@@ -267,7 +267,7 @@ public class KafkaClusterSpec implements HasConfigurableMetrics, HasConfigurable
     }
 
     @Description("Quotas plugin configuration for Kafka brokers allows setting quotas for disk usage, produce/fetch rates, and more. " +
-        "Supported plugin types include `kafka` (default) and `strimzi`. " +
+        "Supported plugin types include `kafka` (default), `strimzi`, and `custom`. " +
         "If not specified, the default `kafka` quotas plugin is used.")
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public QuotasPlugin getQuotas() {

@@ -17,7 +17,7 @@ Configure throughput and storage limits on Kafka brokers by enabling a quota plu
 .Procedure
 
 . Add quota configuration to the `quotas` section of the `Kafka` resource.
-Configure either the `strimzi` or `kafka` quota plugin.
+Configure the `strimzi`, `kafka`, or `custom` quota plugin.
 +
 --
 Example `strimzi` quota plugin configuration:
@@ -77,6 +77,31 @@ NOTE: Default `kafka` quotas apply to internal users, including the Topic Operat
 To prevent the Topic Operator from being throttled, monitor controller metrics and explicitly set a `controllerMutationRate` that accommodates your topic operations.
 For Cruise Control and its metrics reporter, ensure sufficient throughput for rebalances.
 A minimum rate of at least 1 KB/s is recommended for producer and consumer quotas in small clusters (three brokers), which should be increased for larger or more active clusters.
++
+--
+Example `custom` quota plugin configuration:
+
+[source,yaml,subs="+attributes"]
+----
+apiVersion: {KafkaApiVersion}
+kind: Kafka
+metadata:
+  name: my-cluster
+spec:
+  kafka:
+    # ...
+    quotas:
+      type: custom
+      quotaCallbackClass: com.example.kafka.quotas.MyQuotaCallback
+      kafkaAdminClientConfigPrefix: com.example.quotas.kafka.admin
+      config:
+        com.example.quotas.limit.ratio: "0.05"
+----
+
+* `quotaCallbackClass` specifies a class implementing the `ClientQuotaCallback` interface, which must be added to the Kafka container image, for example by building a custom image.
+* `kafkaAdminClientConfigPrefix` (optional) has the operator generate the configuration of a TLS Kafka Admin client connecting to the Kafka cluster under options with the given prefix, in the same way it does for the `strimzi` plugin. Use it when the plugin needs to connect to its own cluster, for example to collect storage information.
+* `config` (optional) sets plugin configuration options, which are added verbatim to the Kafka configuration. Options managed by Strimzi itself cannot be set here.
+--
 
 . Apply the changes to the `Kafka` configuration.
 +
@@ -88,3 +113,4 @@ For a complete list of supported options, see the https://github.com/strimzi/kaf
 
 * link:{BookURLConfiguring}#type-QuotasPluginStrimzi-reference[`QuotasPluginStrimzi` schema reference^]
 * link:{BookURLConfiguring}#type-QuotasPluginKafka-reference[`QuotasPluginKafka` schema reference^]
+* link:{BookURLConfiguring}#type-QuotasPluginCustom-reference[`QuotasPluginCustom` schema reference^]

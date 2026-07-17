@@ -21,6 +21,7 @@ import io.strimzi.api.kafka.model.kafka.listener.KafkaListenerAuthenticationCust
 import io.strimzi.api.kafka.model.kafka.listener.KafkaListenerAuthenticationScramSha512;
 import io.strimzi.api.kafka.model.kafka.listener.KafkaListenerAuthenticationTls;
 import io.strimzi.api.kafka.model.kafka.quotas.QuotasPlugin;
+import io.strimzi.api.kafka.model.kafka.quotas.QuotasPluginCustom;
 import io.strimzi.api.kafka.model.kafka.quotas.QuotasPluginKafka;
 import io.strimzi.api.kafka.model.kafka.quotas.QuotasPluginStrimzi;
 import io.strimzi.api.kafka.model.kafka.tieredstorage.RemoteStorageManager;
@@ -45,6 +46,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -795,6 +797,10 @@ public class KafkaBrokerConfigurationBuilder {
                 printSectionHeader("Quotas configuration");
                 configureQuotasPluginStrimzi(clusterName, quotasPluginStrimzi);
                 writer.println();
+            } else if (quotasPlugin instanceof QuotasPluginCustom quotasPluginCustom) {
+                printSectionHeader("Quotas configuration");
+                configureQuotasPluginCustom(clusterName, quotasPluginCustom);
+                writer.println();
             }
         }
 
@@ -837,6 +843,33 @@ public class KafkaBrokerConfigurationBuilder {
         }
 
         writer.println(String.format("client.quota.callback.static.excluded.principal.name.list=%s", String.join(";", excludedPrincipals)));
+    }
+
+    /**
+     * Configures a custom quotas plugin
+     *
+     * @param clusterName           Name of the cluster
+     * @param quotasPluginCustom    Custom quotas plugin configuration
+     */
+    private void configureQuotasPluginCustom(String clusterName, QuotasPluginCustom quotasPluginCustom) {
+        writer.println("client.quota.callback.class=" + quotasPluginCustom.getQuotaCallbackClass());
+
+        if (quotasPluginCustom.getKafkaAdminClientConfigPrefix() != null) {
+            // configuration of Admin client that the plugin can use to connect to its own Kafka cluster
+            String prefix = quotasPluginCustom.getKafkaAdminClientConfigPrefix();
+            writer.println(prefix + ".bootstrap.servers=" + KafkaResources.brokersServiceName(clusterName) + ":9091");
+            writer.println(prefix + ".security.protocol=SSL");
+            writer.println(prefix + ".ssl.keystore.certificate.chain=" + String.format(PLACEHOLDER_SECRET_TEMPLATE_KUBE_CONFIG_PROVIDER, reconciliation.namespace(), node.podName(), node.podName() + ".crt"));
+            writer.println(prefix + ".ssl.keystore.key=" + String.format(PLACEHOLDER_SECRET_TEMPLATE_KUBE_CONFIG_PROVIDER, reconciliation.namespace(), node.podName(), node.podName() + ".key"));
+            writer.println(prefix + ".ssl.keystore.type=PEM");
+            writer.println(prefix + ".ssl.truststore.certificates=" + String.format(PLACEHOLDER_SECRET_TEMPLATE_KUBE_CONFIG_PROVIDER, reconciliation.namespace(), KafkaResources.trustBundleSecretName(clusterName), "cluster-ca.crt"));
+            writer.println(prefix + ".ssl.truststore.type=PEM");
+        }
+
+        if (quotasPluginCustom.getConfig() != null) {
+            // sorted for a stable configuration output that does not trigger unnecessary rolling updates
+            new TreeMap<>(quotasPluginCustom.getConfig()).forEach((key, value) -> writer.println(key + "=" + value));
+        }
     }
 
     /**

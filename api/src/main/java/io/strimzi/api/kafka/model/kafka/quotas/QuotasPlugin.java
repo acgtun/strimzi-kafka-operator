@@ -22,6 +22,7 @@ import java.util.Map;
 @JsonSubTypes({
     @JsonSubTypes.Type(name = QuotasPluginKafka.TYPE_KAFKA, value = QuotasPluginKafka.class),
     @JsonSubTypes.Type(name = QuotasPluginStrimzi.TYPE_STRIMZI, value = QuotasPluginStrimzi.class),
+    @JsonSubTypes.Type(name = QuotasPluginCustom.TYPE_CUSTOM, value = QuotasPluginCustom.class),
 })
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @EqualsAndHashCode
@@ -32,9 +33,10 @@ public abstract class QuotasPlugin implements UnknownPropertyPreserving, Seriali
     private Map<String, Object> additionalProperties;
 
     @Description("Quotas plugin type. " +
-        "Currently, the supported types are `kafka` and `strimzi`. " +
+        "Currently, the supported types are `kafka`, `strimzi`, and `custom`. " +
         "`kafka` quotas type uses Kafka's built-in quotas plugin. " +
-        "`strimzi` quotas type uses Strimzi quotas plugin.")
+        "`strimzi` quotas type uses Strimzi quotas plugin. " +
+        "`custom` quotas type uses a user-provided implementation of the `ClientQuotaCallback` interface.")
     public abstract String getType();
 
     @Override
