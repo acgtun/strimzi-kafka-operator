@@ -68,6 +68,7 @@ import io.strimzi.api.kafka.model.kafka.listener.GenericKafkaListener;
 import io.strimzi.api.kafka.model.kafka.listener.KafkaListenerAuthenticationTls;
 import io.strimzi.api.kafka.model.kafka.listener.KafkaListenerType;
 import io.strimzi.api.kafka.model.kafka.quotas.QuotasPlugin;
+import io.strimzi.api.kafka.model.kafka.quotas.QuotasPluginCustom;
 import io.strimzi.api.kafka.model.kafka.quotas.QuotasPluginStrimzi;
 import io.strimzi.api.kafka.model.kafka.tieredstorage.TieredStorage;
 import io.strimzi.api.kafka.model.nodepool.KafkaNodePoolStatus;
@@ -98,6 +99,7 @@ import org.apache.kafka.server.common.MetadataVersion;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -586,6 +588,8 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
                 if (quotasPluginStrimzi.getMinAvailableBytesPerVolume() != null && quotasPluginStrimzi.getMinAvailableRatioPerVolume() != null) {
                     throw new InvalidResourceException("You cannot configure both `minAvailableBytesPerVolume` and `minAvailableRatioPerVolume`, they are mutually exclusive.");
                 }
+            } else if (quotasPlugin instanceof QuotasPluginCustom quotasPluginCustom) {
+                validateQuotasPluginCustom(quotasPluginCustom);
             }
 
             if (configuration.getConfigOption(CLIENT_CALLBACK_CLASS_OPTION) != null) {
@@ -595,6 +599,36 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
                         "The plugin from .spec.kafka.quotas will be used", quotasPlugin.getType())));
 
                 configuration.removeConfigOption(CLIENT_CALLBACK_CLASS_OPTION);
+            }
+        }
+    }
+
+    /**
+     * Validates the configuration of the custom quotas plugin.
+     * The callback class is required.
+     * The options in the config map are passed to Kafka verbatim, so keys that collide with options managed by
+     * Strimzi itself are rejected. Options under the `client.quota.callback.` prefix are allowed, because with a
+     * custom plugin configured, the operator does not manage any of them.
+     *
+     * @param quotasPluginCustom    Custom quotas plugin configuration
+     */
+    private static void validateQuotasPluginCustom(QuotasPluginCustom quotasPluginCustom) {
+        if (quotasPluginCustom.getQuotaCallbackClass() == null || quotasPluginCustom.getQuotaCallbackClass().isBlank()) {
+            throw new InvalidResourceException("The `quotaCallbackClass` field is required when the `custom` quotas plugin type is used.");
+        }
+
+        if (quotasPluginCustom.getConfig() != null) {
+            List<String> forbiddenPrefixes = Arrays.stream(KafkaClusterSpec.FORBIDDEN_PREFIXES.split(", "))
+                    .filter(prefix -> !prefix.startsWith("client.quota.callback."))
+                    .toList();
+
+            List<String> forbiddenKeys = quotasPluginCustom.getConfig().keySet().stream()
+                    .filter(key -> key.equals(CLIENT_CALLBACK_CLASS_OPTION) || forbiddenPrefixes.stream().anyMatch(key::startsWith))
+                    .sorted()
+                    .toList();
+
+            if (!forbiddenKeys.isEmpty()) {
+                throw new InvalidResourceException("Custom quotas plugin config contains options managed by Strimzi which are not allowed: " + String.join(", ", forbiddenKeys));
             }
         }
     }

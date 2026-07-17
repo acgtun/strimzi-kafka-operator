@@ -67,6 +67,7 @@ import io.strimzi.api.kafka.model.kafka.cruisecontrol.CruiseControlResources;
 import io.strimzi.api.kafka.model.kafka.exporter.KafkaExporterResources;
 import io.strimzi.api.kafka.model.kafka.listener.GenericKafkaListenerBuilder;
 import io.strimzi.api.kafka.model.kafka.listener.KafkaListenerType;
+import io.strimzi.api.kafka.model.kafka.quotas.QuotasPluginCustomBuilder;
 import io.strimzi.api.kafka.model.nodepool.KafkaNodePool;
 import io.strimzi.api.kafka.model.nodepool.KafkaNodePoolBuilder;
 import io.strimzi.api.kafka.model.nodepool.KafkaNodePoolStatus;
@@ -1896,6 +1897,69 @@ public class KafkaClusterTest {
             List<KafkaPool> pools = NodePoolUtils.createKafkaPools(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, List.of(POOL_CONTROLLERS, POOL_MIXED, POOL_BROKERS), Map.of(), KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, SHARED_ENV_PROVIDER);
             KafkaCluster.fromCrd(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, pools, VERSIONS, KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, null, SHARED_ENV_PROVIDER);
         });
+    }
+
+    @Test
+    public void testCustomQuotasPluginValidation() {
+        // Valid configuration passes, including options under the client.quota.callback. prefix
+        assertDoesNotThrow(() -> {
+            Kafka kafkaAssembly = new KafkaBuilder(KAFKA)
+                    .editSpec()
+                        .editKafka()
+                            .withQuotas(new QuotasPluginCustomBuilder()
+                                    .withQuotaCallbackClass("com.example.kafka.quotas.MyQuotaCallback")
+                                    .withConfig(Map.of(
+                                            "com.example.quotas.limit.ratio", "0.05",
+                                            "client.quota.callback.static.produce", "1000"))
+                                    .build())
+                        .endKafka()
+                    .endSpec()
+                    .build();
+
+            List<KafkaPool> pools = NodePoolUtils.createKafkaPools(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, List.of(POOL_CONTROLLERS, POOL_MIXED, POOL_BROKERS), Map.of(), KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, SHARED_ENV_PROVIDER);
+            KafkaCluster.fromCrd(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, pools, VERSIONS, KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, null, SHARED_ENV_PROVIDER);
+        });
+    }
+
+    @Test
+    public void testCustomQuotasPluginValidationMissingClass() {
+        InvalidResourceException ex = assertThrows(InvalidResourceException.class, () -> {
+            Kafka kafkaAssembly = new KafkaBuilder(KAFKA)
+                    .editSpec()
+                        .editKafka()
+                            .withQuotas(new QuotasPluginCustomBuilder().build())
+                        .endKafka()
+                    .endSpec()
+                    .build();
+
+            List<KafkaPool> pools = NodePoolUtils.createKafkaPools(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, List.of(POOL_CONTROLLERS, POOL_MIXED, POOL_BROKERS), Map.of(), KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, SHARED_ENV_PROVIDER);
+            KafkaCluster.fromCrd(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, pools, VERSIONS, KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, null, SHARED_ENV_PROVIDER);
+        });
+        assertThat(ex.getMessage(), is("The `quotaCallbackClass` field is required when the `custom` quotas plugin type is used."));
+    }
+
+    @Test
+    public void testCustomQuotasPluginValidationForbiddenConfigKeys() {
+        InvalidResourceException ex = assertThrows(InvalidResourceException.class, () -> {
+            Kafka kafkaAssembly = new KafkaBuilder(KAFKA)
+                    .editSpec()
+                        .editKafka()
+                            .withQuotas(new QuotasPluginCustomBuilder()
+                                    .withQuotaCallbackClass("com.example.kafka.quotas.MyQuotaCallback")
+                                    .withConfig(Map.of(
+                                            "client.quota.callback.class", "com.example.kafka.quotas.OtherCallback",
+                                            "listeners", "PLAINTEXT://:9092",
+                                            "ssl.keystore.location", "/tmp/keystore",
+                                            "com.example.quotas.limit.ratio", "0.05"))
+                                    .build())
+                        .endKafka()
+                    .endSpec()
+                    .build();
+
+            List<KafkaPool> pools = NodePoolUtils.createKafkaPools(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, List.of(POOL_CONTROLLERS, POOL_MIXED, POOL_BROKERS), Map.of(), KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, SHARED_ENV_PROVIDER);
+            KafkaCluster.fromCrd(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, pools, VERSIONS, KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, null, SHARED_ENV_PROVIDER);
+        });
+        assertThat(ex.getMessage(), is("Custom quotas plugin config contains options managed by Strimzi which are not allowed: client.quota.callback.class, listeners, ssl.keystore.location"));
     }
 
     @Test

@@ -3,6 +3,7 @@
 ## 1.2.0
 
 * Add support for Apache Kafka 4.3.1
+* Support for custom quota plugins in the `Kafka` custom resource (`spec.kafka.quotas` with `type: custom`)
 
 ### Major changes, deprecations, and removals
 

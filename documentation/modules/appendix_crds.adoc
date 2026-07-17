@@ -115,8 +115,8 @@ include::../api/io.strimzi.api.kafka.model.kafka.KafkaClusterSpec.adoc[leveloffs
 |xref:type-TieredStorageCustom-{context}[`TieredStorageCustom`]
 |Configure the tiered storage feature for Kafka brokers.
 |quotas
-|xref:type-QuotasPluginKafka-{context}[`QuotasPluginKafka`], xref:type-QuotasPluginStrimzi-{context}[`QuotasPluginStrimzi`]
-|Quotas plugin configuration for Kafka brokers allows setting quotas for disk usage, produce/fetch rates, and more. Supported plugin types include `kafka` (default) and `strimzi`. If not specified, the default `kafka` quotas plugin is used.
+|xref:type-QuotasPluginKafka-{context}[`QuotasPluginKafka`], xref:type-QuotasPluginStrimzi-{context}[`QuotasPluginStrimzi`], xref:type-QuotasPluginCustom-{context}[`QuotasPluginCustom`]
+|Quotas plugin configuration for Kafka brokers allows setting quotas for disk usage, produce/fetch rates, and more. Supported plugin types include `kafka` (default), `strimzi`, and `custom`. If not specified, the default `kafka` quotas plugin is used.
 |====
 
 [id='type-GenericKafkaListener-{context}']
@@ -1146,7 +1146,7 @@ Used in: xref:type-TieredStorageCustom-{context}[`TieredStorageCustom`]
 Used in: xref:type-KafkaClusterSpec-{context}[`KafkaClusterSpec`]
 
 
-The `type` property is a discriminator that distinguishes use of the `QuotasPluginKafka` type from xref:type-QuotasPluginStrimzi-{context}[`QuotasPluginStrimzi`].
+The `type` property is a discriminator that distinguishes use of the `QuotasPluginKafka` type from xref:type-QuotasPluginStrimzi-{context}[`QuotasPluginStrimzi`], xref:type-QuotasPluginCustom-{context}[`QuotasPluginCustom`].
 It must have the value `kafka` for the type `QuotasPluginKafka`.
 [cols="2,2,3a",options="header"]
 |====
@@ -1174,7 +1174,7 @@ It must have the value `kafka` for the type `QuotasPluginKafka`.
 Used in: xref:type-KafkaClusterSpec-{context}[`KafkaClusterSpec`]
 
 
-The `type` property is a discriminator that distinguishes use of the `QuotasPluginStrimzi` type from xref:type-QuotasPluginKafka-{context}[`QuotasPluginKafka`].
+The `type` property is a discriminator that distinguishes use of the `QuotasPluginStrimzi` type from xref:type-QuotasPluginKafka-{context}[`QuotasPluginKafka`], xref:type-QuotasPluginCustom-{context}[`QuotasPluginCustom`].
 It must have the value `strimzi` for the type `QuotasPluginStrimzi`.
 [cols="2,2,3a",options="header"]
 |====
@@ -1197,6 +1197,31 @@ It must have the value `strimzi` for the type `QuotasPluginStrimzi`.
 |excludedPrincipals
 |string array
 |List of principals that are excluded from the quota. The principals have to be prefixed with `User:`, for example `User:my-user;User:CN=my-other-user`.
+|====
+
+[id='type-QuotasPluginCustom-{context}']
+= `QuotasPluginCustom` schema reference
+
+Used in: xref:type-KafkaClusterSpec-{context}[`KafkaClusterSpec`]
+
+
+The `type` property is a discriminator that distinguishes use of the `QuotasPluginCustom` type from xref:type-QuotasPluginKafka-{context}[`QuotasPluginKafka`], xref:type-QuotasPluginStrimzi-{context}[`QuotasPluginStrimzi`].
+It must have the value `custom` for the type `QuotasPluginCustom`.
+[cols="2,2,3a",options="header"]
+|====
+|Property |Property type |Description
+|type
+|string
+|Must be `custom`.
+|quotaCallbackClass
+|string
+|The fully qualified name of a class implementing the `org.apache.kafka.server.quota.ClientQuotaCallback` interface, which must be available on the Kafka classpath. It is set as the value of the `client.quota.callback.class` broker option.
+|kafkaAdminClientConfigPrefix
+|string
+|When set, the operator generates the configuration of a TLS Kafka Admin client connecting to the Kafka cluster (bootstrap address of the replication listener, security protocol, per-node PEM keystore, and the cluster CA truststore) under options prefixed with this value, in the same way it does for the `strimzi` quotas plugin type. For example, with prefix `com.example.quotas.kafka.admin`, the operator sets `com.example.quotas.kafka.admin.bootstrap.servers` and the related security options.
+|config
+|map
+|Configuration options of the custom quotas plugin, added verbatim to the Kafka node configuration. Options managed by Strimzi itself and the `client.quota.callback.class` option cannot be set here.
 |====
 
 [id='type-EntityOperatorSpec-{context}']
