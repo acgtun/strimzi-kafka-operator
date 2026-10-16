@@ -64,6 +64,7 @@ import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -993,6 +994,44 @@ public class KafkaRollerTest {
         assertNoUnclosedAdminClient(kafkaRoller);
     }
 
+    private static Config brokerConfigWithStaleCustomListenerCertificates() {
+        return new Config(List.of(
+                new ConfigEntry("listener.name.custom-9094.ssl.keystore.certificate.chain", null, ConfigEntry.ConfigSource.DYNAMIC_BROKER_CONFIG, true, false, List.of(), null, null),
+                new ConfigEntry("listener.name.old-9095.ssl.keystore.certificate.chain", null, ConfigEntry.ConfigSource.DYNAMIC_BROKER_CONFIG, true, false, List.of(), null, null),
+                new ConfigEntry("listener.name.old-9095.ssl.keystore.key", null, ConfigEntry.ConfigSource.DYNAMIC_BROKER_CONFIG, true, false, List.of(), null, null)));
+    }
+
+    @Test
+    public void testStaleCustomListenerCertificateConfigsRemovedBeforeRestart() {
+        TestingKafkaRoller kafkaRoller = rollerWithCustomCertificates(addPodNames(2, 0, 0), CUSTOM_CERTS, podId -> "abcd1234");
+        kafkaRoller.brokerConfig = brokerConfigWithStaleCustomListenerCertificates();
+
+        kafkaRoller.rollingRestart(pod -> RestartReasons.of(RestartReason.POD_HAS_OLD_REVISION))
+                .toCompletableFuture().join();
+
+        assertThat(restarted(), is(asList(0, 1)));
+        assertThat(kafkaRoller.alteredConfigs, containsInAnyOrder(
+                "0 DELETE listener.name.old-9095.ssl.keystore.certificate.chain",
+                "0 DELETE listener.name.old-9095.ssl.keystore.key",
+                "1 DELETE listener.name.old-9095.ssl.keystore.certificate.chain",
+                "1 DELETE listener.name.old-9095.ssl.keystore.key"));
+        assertNoUnclosedAdminClient(kafkaRoller);
+    }
+
+    @Test
+    public void testRestartWhenStaleCustomListenerCertificateConfigsRemovalFails() {
+        TestingKafkaRoller kafkaRoller = rollerWithCustomCertificates(addPodNames(2, 0, 0), CUSTOM_CERTS, podId -> "abcd1234");
+        kafkaRoller.brokerConfig = brokerConfigWithStaleCustomListenerCertificates();
+        kafkaRoller.failAlterConfigs = true;
+
+        kafkaRoller.rollingRestart(pod -> RestartReasons.of(RestartReason.POD_HAS_OLD_REVISION))
+                .toCompletableFuture().join();
+
+        assertThat(restarted(), is(asList(0, 1)));
+        assertThat(kafkaRoller.alteredConfigs.size(), is(4));
+        assertNoUnclosedAdminClient(kafkaRoller);
+    }
+
     private TestingKafkaRoller rollerWithActiveController(PodOperator podOps, Set<NodeRef> nodes, int activeController) {
         return new TestingKafkaRoller(nodes, podOps,
                 noException(), null, noException(), noException(),
@@ -1141,6 +1180,9 @@ public class KafkaRollerTest {
         private final BrokerState brokerState;
         private final Function<Integer, String> servedThumbprints;
         private final List<String> patchedThumbprints = new ArrayList<>();
+        private final List<String> alteredConfigs = new ArrayList<>();
+        private Config brokerConfig = new Config(emptyList());
+        private boolean failAlterConfigs = false;
 
         @SuppressWarnings("checkstyle:ParameterNumber")
         private TestingKafkaRoller(Set<NodeRef> nodes,
@@ -1229,8 +1271,18 @@ public class KafkaRollerTest {
                     }
                     return null;
                 } else if ("incrementalAlterConfigs".equals(invocation.getMethod().getName())) {
+                    Map<ConfigResource, Collection<AlterConfigOp>> configs = invocation.getArgument(0);
+                    Map<ConfigResource, KafkaFuture<Void>> values = new HashMap<>();
+                    configs.forEach((resource, ops) -> {
+                        ops.forEach(op -> alteredConfigs.add(resource.name() + " " + op.opType() + " " + op.configEntry().name()));
+                        if (failAlterConfigs) {
+                            KafkaFutureImpl<Void> future = new KafkaFutureImpl<>();
+                            future.completeExceptionally(new RuntimeException("Alter configs failed"));
+                            values.put(resource, future);
+                        }
+                    });
                     AlterConfigsResult result = mock(AlterConfigsResult.class);
-                    when(result.values()).thenReturn(Collections.emptyMap());
+                    when(result.values()).thenReturn(values);
                     return result;
                 }
                 throw new RuntimeException("Not mocked " + invocation.getMethod());
@@ -1294,7 +1346,7 @@ public class KafkaRollerTest {
             ForceableProblem problem = getConfigsException.apply(nodeRef.nodeId());
             if (problem != null) {
                 throw problem;
-            } else return new Config(emptyList());
+            } else return brokerConfig;
         }
 
         @Override

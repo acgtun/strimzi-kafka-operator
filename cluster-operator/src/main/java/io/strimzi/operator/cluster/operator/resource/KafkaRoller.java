@@ -873,6 +873,7 @@ public class KafkaRoller {
         try {
             alterBrokerConfig(nodeRef, ops, "Error removing stale custom listener certificate configurations of pod " + nodeRef);
         } catch (ForceableProblem e) {
+            // Kafka ignores unresolvable dynamic configurations on startup and uses the static ones, so the restart can proceed
             LOGGER.warnCr(reconciliation, "Failed to remove stale custom listener certificate configurations of pod {}", nodeRef, e);
         }
     }
