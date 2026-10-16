@@ -788,13 +788,15 @@ public class KafkaRoller {
 
             while (!listener.thumbprint().equals(served)) {
                 if (System.currentTimeMillis() > deadline) {
-                    throw new ForceableProblem("Pod " + nodeRef.podName() + " does not serve the desired certificate on listener " + listener.name()
-                            + " (desired " + listener.thumbprint() + ", served " + served + ")", lastProblem);
+                    throw new ForceableProblem("Pod " + nodeRef.podName() + " does not serve the desired certificate " + listener.thumbprint()
+                            + " on listener " + listener.name() + (served != null ? " (served " + served + ")" : ""), lastProblem);
                 }
 
                 try {
                     served = servedCertificateThumbprint(nodeRef, listener.port());
+                    lastProblem = null;
                 } catch (ForceableProblem e) {
+                    served = null;
                     lastProblem = e;
                 }
 
