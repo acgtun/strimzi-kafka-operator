@@ -890,11 +890,29 @@ public class KafkaRollerTest {
             List.of(new CustomListenerCertificates.Listener("custom-9094", 9094, "abcd1234")), "{custom=abcd1234}");
 
     private TestingKafkaRoller rollerWithCustomCertificates(Set<NodeRef> nodes, CustomListenerCertificates customCerts, Function<Integer, String> servedThumbprints) {
-        return new TestingKafkaRoller(nodes, mockPodOps(podId -> CompletableFuture.completedFuture(null)),
+        return rollerWithCustomCertificates(mockPodOps(podId -> CompletableFuture.completedFuture(null)), nodes, customCerts, servedThumbprints);
+    }
+
+    private TestingKafkaRoller rollerWithCustomCertificates(PodOperator podOps, Set<NodeRef> nodes, CustomListenerCertificates customCerts, Function<Integer, String> servedThumbprints) {
+        return new TestingKafkaRoller(nodes, podOps,
                 noException(), null, noException(), noException(),
                 brokerId -> CompletableFuture.completedFuture(true),
                 new DefaultAdminClientProvider(), new DefaultKafkaAgentClientProvider(), false, null, -1,
                 customCerts, servedThumbprints);
+    }
+
+    @ParameterizedTest(name = "testPodStuckForceRestartWithChangedCustomListenerCertificates-{0}")
+    @MethodSource("stuckPodReasons")
+    public void testPodStuckForceRestartWithChangedCustomListenerCertificates(String reason) {
+        PodOperator podOps = mockPodOpsWithStuckPod(podId -> CompletableFuture.completedFuture(null), reason);
+        TestingKafkaRoller kafkaRoller = rollerWithCustomCertificates(podOps, addPodNames(REPLICAS, 0, 0), CUSTOM_CERTS, podId -> "abcd1234");
+
+        kafkaRoller.rollingRestart(pod -> RestartReasons.of(RestartReason.CUSTOM_LISTENER_CERTIFICATES_CHANGED))
+                .toCompletableFuture().join();
+
+        assertThat(restarted(), is(asList(0, 1, 2, 3, 4)));
+        assertThat(kafkaRoller.patchedThumbprints, is(emptyList()));
+        assertNoUnclosedAdminClient(kafkaRoller);
     }
 
     @Test

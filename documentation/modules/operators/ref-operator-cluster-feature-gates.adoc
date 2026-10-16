@@ -162,6 +162,9 @@ Pods that have only the controller role are always restarted.
 To verify the served certificate, the Cluster Operator must be able to connect to the listeners that use custom certificates.
 If you configure `networkPolicyPeers` for such a listener, the Cluster Operator adds itself to the generated network policy.
 
+To allow a new certificate to have a different subject or different subject alternative names, the feature gate adds `ssl.allow.dn.changes` and `ssl.allow.san.changes` to the configuration of listeners that use custom certificates.
+Kafka reads these options only at startup, so enabling or disabling the feature gate triggers a rolling update of the brokers that have such listeners.
+
 To enable the `DynamicCertificateReload` feature gate, specify `+DynamicCertificateReload` in the `STRIMZI_FEATURE_GATES` environment variable in the Cluster Operator configuration.
 
 == Enabling feature gates

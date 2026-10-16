@@ -1747,6 +1747,19 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
      * @return The network policy.
      */
     public NetworkPolicy generateNetworkPolicy(String operatorNamespace, Labels operatorNamespaceLabels) {
+        return generateNetworkPolicy(operatorNamespace, operatorNamespaceLabels, false);
+    }
+
+    /**
+     * Generates the NetworkPolicies relevant for Kafka brokers
+     *
+     * @param operatorNamespace                             Namespace where the Strimzi Cluster Operator runs. Null if not configured.
+     * @param operatorNamespaceLabels                       Labels of the namespace where the Strimzi Cluster Operator runs. Null if not configured.
+     * @param dynamicCertificateReload                      Whether custom listener certificates can be reloaded dynamically
+     *
+     * @return The network policy.
+     */
+    public NetworkPolicy generateNetworkPolicy(String operatorNamespace, Labels operatorNamespaceLabels, boolean dynamicCertificateReload) {
         // Internal peers => Strimzi components which need access
         NetworkPolicyPeer clusterOperatorPeer = NetworkPolicyUtils.createPeer(Map.of(Labels.STRIMZI_KIND_LABEL, "cluster-operator"), NetworkPolicyUtils.clusterOperatorNamespaceSelector(namespace, operatorNamespace, operatorNamespaceLabels));
         NetworkPolicyPeer kafkaClusterPeer = NetworkPolicyUtils.createPeer(labels.strimziSelectorLabels().toMap());
@@ -1769,12 +1782,13 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
         // KafkaAgent listener is used by our own tool => Operators
         rules.add(NetworkPolicyUtils.createIngressRule(KAFKA_AGENT_PORT, List.of(clusterOperatorPeer)));
 
-        // User-configured listeners are by default open for all. Users can pass peers in the Kafka CR. The operator
-        // needs access to listeners with custom certificates to verify that the brokers serve the right certificates.
+        // User-configured listeners are by default open for all. Users can pass peers in the Kafka CR. When custom
+        // certificates are reloaded dynamically, the operator needs access to their listeners to verify that the
+        // brokers serve the right certificates.
         for (GenericKafkaListener listener : listeners) {
             List<NetworkPolicyPeer> peers = listener.getNetworkPolicyPeers();
 
-            if (peers != null && !peers.isEmpty() && hasCustomCertificate(listener)) {
+            if (dynamicCertificateReload && peers != null && !peers.isEmpty() && hasCustomCertificate(listener)) {
                 peers = new ArrayList<>(peers);
                 peers.add(clusterOperatorPeer);
             }
@@ -1857,6 +1871,24 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
      * @return The Kafka broker configuration as a String
      */
     public String generatePerBrokerConfiguration(int nodeId, Map<Integer, Map<String, String>> advertisedHostnames, Map<Integer, Map<String, String>> advertisedPorts, boolean cordoned)   {
+        return generatePerBrokerConfiguration(nodeId, advertisedHostnames, advertisedPorts, cordoned, false);
+    }
+
+    /**
+     * Generates the individual Kafka broker configuration. This configuration uses only minimum of placeholders - for
+     * values which are known only inside the pod such as secret values (e.g. passwords), NodePort addresses
+     * or Rack IDs. All other values such as broker IDs, advertised ports or hostnames are already prefilled in the
+     * configuration. This method is normally used with StrimziPodSets.
+     *
+     * @param nodeId                    ID of the broker for which is this configuration generated
+     * @param advertisedHostnames       Map with advertised hostnames for different listeners
+     * @param advertisedPorts           Map with advertised ports for different listeners
+     * @param cordoned                  Whether the broker should be cordoned
+     * @param dynamicCertificateReload  Whether custom listener certificates can be reloaded dynamically
+     *
+     * @return The Kafka broker configuration as a String
+     */
+    public String generatePerBrokerConfiguration(int nodeId, Map<Integer, Map<String, String>> advertisedHostnames, Map<Integer, Map<String, String>> advertisedPorts, boolean cordoned, boolean dynamicCertificateReload)   {
         KafkaPool pool = nodePoolForNodeId(nodeId);
 
         return generatePerBrokerConfiguration(
@@ -1864,7 +1896,8 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
                 pool,
                 advertisedHostnames,
                 advertisedPorts,
-                cordoned
+                cordoned,
+                dynamicCertificateReload
         );
     }
 
@@ -1876,10 +1909,11 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
      * @param advertisedHostnames   Map with advertised hostnames
      * @param advertisedPorts       Map with advertised ports
      * @param cordoned              Whether the broker should be cordoned
+     * @param dynamicCertificateReload  Whether custom listener certificates can be reloaded dynamically
      *
      * @return  String with the Kafka broker configuration
      */
-    private String generatePerBrokerConfiguration(NodeRef node, KafkaPool pool, Map<Integer, Map<String, String>> advertisedHostnames, Map<Integer, Map<String, String>> advertisedPorts, boolean cordoned)   {
+    private String generatePerBrokerConfiguration(NodeRef node, KafkaPool pool, Map<Integer, Map<String, String>> advertisedHostnames, Map<Integer, Map<String, String>> advertisedPorts, boolean cordoned, boolean dynamicCertificateReload)   {
         return new KafkaBrokerConfigurationBuilder(reconciliation, node, securityContext)
                 .withRackId(rack)
                 .withKRaft(cluster, namespace, nodes())
@@ -1890,7 +1924,8 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
                         namespace,
                         listeners,
                         listenerId -> advertisedHostnames.get(node.nodeId()).get(listenerId),
-                        listenerId -> advertisedPorts.get(node.nodeId()).get(listenerId)
+                        listenerId -> advertisedPorts.get(node.nodeId()).get(listenerId),
+                        dynamicCertificateReload
                 )
                 .withAuthorization(cluster, authorization)
                 .withCruiseControl(cluster, ccMetricsReporter, node.broker())
@@ -1930,6 +1965,22 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
      * @return ConfigMap with the shared configuration.
      */
     public List<ConfigMap> generatePerBrokerConfigurationConfigMaps(MetricsAndLogging metricsAndLogging, Map<Integer, Map<String, String>> advertisedHostnames, Map<Integer, Map<String, String>> advertisedPorts, Set<Integer> scalingDownBlockedNodes)   {
+        return generatePerBrokerConfigurationConfigMaps(metricsAndLogging, advertisedHostnames, advertisedPorts, scalingDownBlockedNodes, false);
+    }
+
+    /**
+     * Generates a list of configuration ConfigMaps - one for each broker in the cluster. The ConfigMaps contain the
+     * configurations which should be used by given broker. This is used with StrimziPodSets.
+     *
+     * @param metricsAndLogging         Object with logging and metrics configuration collected from external user-provided config maps
+     * @param advertisedHostnames       Map with advertised hostnames for different brokers and listeners
+     * @param advertisedPorts           Map with advertised ports for different brokers and listeners
+     * @param scalingDownBlockedNodes   Set of node IDs that are blocked from scaling down and should be cordoned
+     * @param dynamicCertificateReload  Whether custom listener certificates can be reloaded dynamically
+     *
+     * @return ConfigMap with the shared configuration.
+     */
+    public List<ConfigMap> generatePerBrokerConfigurationConfigMaps(MetricsAndLogging metricsAndLogging, Map<Integer, Map<String, String>> advertisedHostnames, Map<Integer, Map<String, String>> advertisedPorts, Set<Integer> scalingDownBlockedNodes, boolean dynamicCertificateReload)   {
         String parsedMetrics = null;
         if (metrics instanceof JmxPrometheusExporterModel exporter) {
             parsedMetrics = exporter.metricsJson(reconciliation, metricsAndLogging.metricsCm());
@@ -1946,7 +1997,7 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
                 }
 
                 data.put(LoggingModel.LOG4J2_CONFIG_MAP_KEY, parsedLogging);
-                data.put(BROKER_CONFIGURATION_FILENAME, generatePerBrokerConfiguration(node, pool, advertisedHostnames, advertisedPorts, scalingDownBlockedNodes.contains(node.nodeId())));
+                data.put(BROKER_CONFIGURATION_FILENAME, generatePerBrokerConfiguration(node, pool, advertisedHostnames, advertisedPorts, scalingDownBlockedNodes.contains(node.nodeId()), dynamicCertificateReload));
                 data.put(AGENT_CONFIGURATION_FILENAME, generateAgentConfiguration(node));
                 data.put(BROKER_CLUSTER_ID_FILENAME, clusterId);
                 data.put(BROKER_METADATA_VERSION_FILENAME, metadataVersion);

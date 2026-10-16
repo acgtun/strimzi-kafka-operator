@@ -296,6 +296,32 @@ public class KafkaBrokerConfigurationBuilder {
             Function<String, String> advertisedHostnameProvider,
             Function<String, String> advertisedPortProvider
     )  {
+        return withListeners(clusterName, namespace, kafkaListeners, advertisedHostnameProvider, advertisedPortProvider, false);
+    }
+
+    /**
+     * Configures the listeners based on the listeners enabled by the users in the Kafka CR. This method is used to
+     * generate the per-broker configuration which uses actual broker IDs and addresses instead of just placeholders.
+     *
+     * @param clusterName                Name of the cluster (important for the advertised hostnames)
+     * @param namespace                  Namespace (important for generating the advertised hostname)
+     * @param kafkaListeners             The listeners configuration from the Kafka CR
+     * @param advertisedHostnameProvider Lambda method which provides the advertised hostname for given listener and
+     *                                   broker. This is used to configure the user-configurable listeners.
+     * @param advertisedPortProvider     Lambda method which provides the advertised port for given listener and broker.
+     *                                   This is used to configure the user-configurable listeners.
+     * @param dynamicCertificateReload   Whether custom listener certificates can be reloaded dynamically
+     *
+     * @return Returns the builder instance
+     */
+    public KafkaBrokerConfigurationBuilder withListeners(
+            String clusterName,
+            String namespace,
+            List<GenericKafkaListener> kafkaListeners,
+            Function<String, String> advertisedHostnameProvider,
+            Function<String, String> advertisedPortProvider,
+            boolean dynamicCertificateReload
+    )  {
         List<String> listeners = new ArrayList<>();
         List<String> advertisedListeners = new ArrayList<>();
         List<String> securityProtocol = new ArrayList<>();
@@ -357,7 +383,7 @@ public class KafkaBrokerConfigurationBuilder {
                         customServerCert = listener.getConfiguration().getBrokerCertChainAndKey();
                     }
 
-                    configureTlsOnListener(listenerName, customServerCert);
+                    configureTlsOnListener(listenerName, customServerCert, dynamicCertificateReload);
                 }
 
                 writer.println();
@@ -486,8 +512,9 @@ public class KafkaBrokerConfigurationBuilder {
      *
      * @param listenerName  The name of the listener under which it is used in the Kafka broker configuration file
      * @param customServerCertificate The custom certificate configuration (null if not specified by the user in the Kafka CR)
+     * @param dynamicCertificateReload Whether custom listener certificates can be reloaded dynamically
      */
-    private void configureTlsOnListener(String listenerName, CertAndKeySecretSource customServerCertificate) {
+    private void configureTlsOnListener(String listenerName, CertAndKeySecretSource customServerCertificate, boolean dynamicCertificateReload) {
         final String listenerNameInProperty = listenerName.toLowerCase(Locale.ENGLISH);
 
         String certConfigProviderValue;
@@ -503,7 +530,7 @@ public class KafkaBrokerConfigurationBuilder {
         writer.println(String.format("listener.name.%s.ssl.keystore.key=%s", listenerNameInProperty, keyConfigProviderValue));
         writer.println(String.format("listener.name.%s.ssl.keystore.type=PEM", listenerNameInProperty));
 
-        if (customServerCertificate != null)  {
+        if (customServerCertificate != null && dynamicCertificateReload)  {
             // Custom certificates can be reloaded dynamically and the new certificate might have a different subject
             // or SANs. These options are read by Kafka only from the static configuration.
             writer.println(String.format("listener.name.%s.ssl.allow.dn.changes=true", listenerNameInProperty));

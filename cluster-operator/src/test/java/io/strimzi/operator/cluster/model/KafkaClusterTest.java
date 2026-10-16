@@ -1075,10 +1075,15 @@ public class KafkaClusterTest {
         List<KafkaPool> pools = NodePoolUtils.createKafkaPools(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, List.of(POOL_CONTROLLERS, POOL_MIXED, POOL_BROKERS), Map.of(), KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, SHARED_ENV_PROVIDER);
         KafkaCluster kc = KafkaCluster.fromCrd(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, pools, VERSIONS, KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, null, SHARED_ENV_PROVIDER, KafkaClusterSecurityContext.DEFAULT_KAFKA_CLUSTER_SECURITY_CONTEXT);
 
-        NetworkPolicy np = kc.generateNetworkPolicy(null, null);
-
-        // The operator is added to the user-configured peers
+        // Without dynamic certificate reload, the user-configured peers are used as they are
+        NetworkPolicy np = kc.generateNetworkPolicy(null, null, false);
         List<NetworkPolicyIngressRule> rules = np.getSpec().getIngress().stream().filter(ing -> ing.getPorts().get(0).getPort().equals(new IntOrString(9093))).collect(Collectors.toList());
+        assertThat(rules.size(), is(1));
+        assertThat(rules.get(0).getFrom(), is(List.of(peer1)));
+
+        // With dynamic certificate reload, the operator is added to the user-configured peers
+        np = kc.generateNetworkPolicy(null, null, true);
+        rules = np.getSpec().getIngress().stream().filter(ing -> ing.getPorts().get(0).getPort().equals(new IntOrString(9093))).collect(Collectors.toList());
         assertThat(rules.size(), is(1));
         assertThat(rules.get(0).getFrom().size(), is(2));
         assertThat(rules.get(0).getFrom().get(0), is(peer1));

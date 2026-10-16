@@ -357,7 +357,7 @@ public class KafkaReconciler {
      */
     protected Future<Void> networkPolicy() {
         if (isNetworkPolicyGeneration) {
-            return VertxUtil.toFuture(networkPolicyOperator.reconcile(reconciliation, reconciliation.namespace(), KafkaResources.kafkaNetworkPolicyName(reconciliation.name()), kafka.generateNetworkPolicy(operatorNamespace, operatorNamespaceLabels)))
+            return VertxUtil.toFuture(networkPolicyOperator.reconcile(reconciliation, reconciliation.namespace(), KafkaResources.kafkaNetworkPolicyName(reconciliation.name()), kafka.generateNetworkPolicy(operatorNamespace, operatorNamespaceLabels, isDynamicCertificateReloadEnabled)))
                     .mapEmpty();
         } else {
             return Future.succeededFuture();
@@ -488,7 +488,7 @@ public class KafkaReconciler {
                     this.coIdentity,
                     adminClientProvider,
                     kafkaAgentClientProvider,
-                    brokerId -> kafka.generatePerBrokerConfiguration(brokerId, kafkaAdvertisedHostnames, kafkaAdvertisedPorts, scalingDownBlockedNodes.contains(brokerId)),
+                    brokerId -> kafka.generatePerBrokerConfiguration(brokerId, kafkaAdvertisedHostnames, kafkaAdvertisedPorts, scalingDownBlockedNodes.contains(brokerId), isDynamicCertificateReloadEnabled),
                     kafka.getKafkaVersion(),
                     allowReconfiguration,
                     eventsPublisher,
@@ -715,7 +715,7 @@ public class KafkaReconciler {
     protected Future<Void> perBrokerKafkaConfiguration(MetricsAndLogging metricsAndLogging) {
         return VertxUtil.toFuture(configMapOperator.listAsync(reconciliation.namespace(), kafka.getSelectorLabels()))
                 .compose(existingConfigMaps -> {
-                    List<ConfigMap> desiredConfigMaps = kafka.generatePerBrokerConfigurationConfigMaps(metricsAndLogging, listenerReconciliationResults.advertisedHostnames, listenerReconciliationResults.advertisedPorts, scalingDownBlockedNodes);
+                    List<ConfigMap> desiredConfigMaps = kafka.generatePerBrokerConfigurationConfigMaps(metricsAndLogging, listenerReconciliationResults.advertisedHostnames, listenerReconciliationResults.advertisedPorts, scalingDownBlockedNodes, isDynamicCertificateReloadEnabled);
                     List<Future<?>> ops = new ArrayList<>();
 
                     // Delete all existing ConfigMaps which are not desired and are not the shared config map
