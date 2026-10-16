@@ -22,6 +22,7 @@ import io.strimzi.api.kafka.model.podset.StrimziPodSet;
 import io.strimzi.certs.CertAndKey;
 import io.strimzi.operator.cluster.auth.RequestedServiceAccountAuthIdentity;
 import io.strimzi.operator.cluster.model.InPlacePodResizingUtils;
+import io.strimzi.operator.cluster.model.KafkaCluster;
 import io.strimzi.operator.cluster.model.NodeRef;
 import io.strimzi.operator.cluster.model.PodRevision;
 import io.strimzi.operator.cluster.model.PodSetUtils;
@@ -223,6 +224,10 @@ public class ReconcilerUtils {
 
         if (PodRevision.hasChanged(pod, podSet, PodRevision.STRIMZI_REVISION_ANNOTATION)) {
             restartReasons.add(RestartReason.POD_HAS_OLD_REVISION);
+        }
+
+        if (PodRevision.hasChanged(pod, podSet, KafkaCluster.ANNO_STRIMZI_CUSTOM_LISTENER_CERT_THUMBPRINTS)) {
+            restartReasons.add(RestartReason.CUSTOM_LISTENER_CERTIFICATES_CHANGED);
         }
 
         // Adds any reasons to restart related to in-place Pod resizing

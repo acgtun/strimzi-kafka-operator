@@ -17,7 +17,9 @@ import io.strimzi.operator.common.model.Labels;
 import tools.jackson.core.JacksonException;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * In the future, as we better utilize the StrimziPodSet possibilities and not just replace StatefulSets 1-to-1, the
@@ -41,7 +43,8 @@ public class PodRevision {
 
     /**
      * Generates the revision of the Pod. Currently, it just serializes the Pod using Jackson ObjectMapper and creates
-     * a SHA1 hashstub from it.
+     * a SHA1 hashstub from it. The container resources and the custom listener certificate thumbprints are excluded
+     * from the revision because they are tracked separately and might not require the Pod to be rolled.
      *
      * @param reconciliation    Reconciliation identifier (used for logging)
      * @param pod               Pod for which the revision should be calculated
@@ -51,6 +54,12 @@ public class PodRevision {
     public static String getRevision(Reconciliation reconciliation, Pod pod) {
         try {
             Pod podWithoutResources = new PodBuilder(pod).build();
+
+            if (podWithoutResources.getMetadata() != null && podWithoutResources.getMetadata().getAnnotations() != null) {
+                Map<String, String> annotations = new HashMap<>(podWithoutResources.getMetadata().getAnnotations());
+                annotations.remove(KafkaCluster.ANNO_STRIMZI_CUSTOM_LISTENER_CERT_THUMBPRINTS);
+                podWithoutResources.getMetadata().setAnnotations(annotations);
+            }
 
             // Reset resources in any init containers if needed
             if (podWithoutResources.getSpec() != null && podWithoutResources.getSpec().getInitContainers() != null) {

@@ -83,6 +83,32 @@ public class PodRevisionTest {
     }
 
     @Test
+    public void testRevisionIgnoresCustomListenerCertificateThumbprints() {
+        Pod pod1 = new PodBuilder(POD)
+                .editMetadata()
+                    .withAnnotations(Map.of("my-annotation", "foo", KafkaCluster.ANNO_STRIMZI_CUSTOM_LISTENER_CERT_THUMBPRINTS, "{external=aaaaaaaa}"))
+                .endMetadata()
+                .build();
+        Pod pod2 = new PodBuilder(POD)
+                .editMetadata()
+                    .withAnnotations(Map.of("my-annotation", "foo", KafkaCluster.ANNO_STRIMZI_CUSTOM_LISTENER_CERT_THUMBPRINTS, "{external=bbbbbbbb}"))
+                .endMetadata()
+                .build();
+        Pod pod3 = new PodBuilder(POD)
+                .editMetadata()
+                    .withAnnotations(Map.of("my-annotation", "bar", KafkaCluster.ANNO_STRIMZI_CUSTOM_LISTENER_CERT_THUMBPRINTS, "{external=aaaaaaaa}"))
+                .endMetadata()
+                .build();
+
+        String revision = PodRevision.getRevision(Reconciliation.DUMMY_RECONCILIATION, pod1);
+        assertThat(PodRevision.getRevision(Reconciliation.DUMMY_RECONCILIATION, pod2), is(revision));
+        assertThat(PodRevision.getRevision(Reconciliation.DUMMY_RECONCILIATION, pod3), is(not(revision)));
+
+        // The original pod is not modified
+        assertThat(pod1.getMetadata().getAnnotations().get(KafkaCluster.ANNO_STRIMZI_CUSTOM_LISTENER_CERT_THUMBPRINTS), is("{external=aaaaaaaa}"));
+    }
+
+    @Test
     public void testResourceRevisions() {
         String basicPodRevision = PodRevision.getResourceRevision(Reconciliation.DUMMY_RECONCILIATION, POD);
 

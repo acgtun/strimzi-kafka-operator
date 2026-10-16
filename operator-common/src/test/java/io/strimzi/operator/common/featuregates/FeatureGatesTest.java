@@ -54,11 +54,13 @@ public class FeatureGatesTest {
         assertThat(new FeatureGates("+UseBackgroundPodDeletion").useBackgroundPodDeletionEnabled(), is(true));
         assertThat(new FeatureGates("-UseBackgroundPodDeletion").useBackgroundPodDeletionEnabled(), is(false));
         assertThat(new FeatureGates("   +UseBackgroundPodDeletion   ").useBackgroundPodDeletionEnabled(), is(true));
+        assertThat(new FeatureGates("+DynamicCertificateReload").dynamicCertificateReloadEnabled(), is(true));
+        assertThat(new FeatureGates("-DynamicCertificateReload").dynamicCertificateReloadEnabled(), is(false));
 
-//        Once we have again two (and more) feature gates, we should uncomment these checks
-//        assertThat(new FeatureGates("-UseBackgroundPodDeletion,-DummyFeatureGate").useBackgroundPodDeletionEnabled(), is(false));
-//        assertThat(new FeatureGates("  +UseBackgroundPodDeletion    ,    +DummyFeatureGate").useBackgroundPodDeletionEnabled(), is(true));
-//        assertThat(new FeatureGates("+DummyFeatureGate,-UseBackgroundPodDeletion").useBackgroundPodDeletionEnabled(), is(false));
+        assertThat(new FeatureGates("-UseBackgroundPodDeletion,-DynamicCertificateReload").useBackgroundPodDeletionEnabled(), is(false));
+        assertThat(new FeatureGates("  +UseBackgroundPodDeletion    ,    +DynamicCertificateReload").useBackgroundPodDeletionEnabled(), is(true));
+        assertThat(new FeatureGates("+DynamicCertificateReload,-UseBackgroundPodDeletion").useBackgroundPodDeletionEnabled(), is(false));
+        assertThat(new FeatureGates("+DynamicCertificateReload,-UseBackgroundPodDeletion").dynamicCertificateReloadEnabled(), is(true));
     }
 
     @Test
@@ -115,5 +117,7 @@ public class FeatureGatesTest {
 
         assertThat(new FeatureGates("+UseBackgroundPodDeletion").toEnvironmentVariable(), is(""));
         assertThat(new FeatureGates("-UseBackgroundPodDeletion").toEnvironmentVariable(), is("-UseBackgroundPodDeletion"));
+        assertThat(new FeatureGates("+DynamicCertificateReload").toEnvironmentVariable(), is("+DynamicCertificateReload"));
+        assertThat(new FeatureGates("-DynamicCertificateReload").toEnvironmentVariable(), is(""));
     }
 }

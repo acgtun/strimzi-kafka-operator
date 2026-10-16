@@ -8,6 +8,7 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import io.fabric8.kubernetes.api.model.ContainerStateWaiting;
 import io.fabric8.kubernetes.api.model.ContainerStatus;
 import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.client.KubernetesClientException;
 import io.strimzi.api.kafka.model.kafka.KafkaResources;
 import io.strimzi.kafka.config.model.Scope;
@@ -36,6 +37,8 @@ import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.errors.SslAuthenticationException;
 
+import java.io.IOException;
+import java.security.GeneralSecurityException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -105,6 +108,8 @@ public class KafkaRoller {
     private static final ReconciliationLogger LOGGER = ReconciliationLogger.create(KafkaRoller.class);
     private static final String CONTROLLER_QUORUM_FETCH_TIMEOUT_MS_CONFIG_NAME = "controller.quorum.fetch.timeout.ms";
     private static final String CONTROLLER_QUORUM_FETCH_TIMEOUT_MS_CONFIG_DEFAULT = "2000";
+    private static final long CUSTOM_LISTENER_CERTIFICATE_RELOAD_TIMEOUT_MS = 60_000;
+    private static final int CUSTOM_LISTENER_CONNECT_TIMEOUT_MS = 10_000;
 
     private final PodOperator podOperations;
     private final long pollingIntervalMs;
@@ -121,6 +126,7 @@ public class KafkaRoller {
     private final KafkaVersion kafkaVersion;
     private final Reconciliation reconciliation;
     private final boolean allowReconfiguration;
+    private final CustomListenerCertificates customListenerCertificates;
     /**
      * Admin client used to send requests that are only relevant for the brokers. It is bootstrapped with broker nodes that might be rolled.
      */
@@ -153,6 +159,33 @@ public class KafkaRoller {
                        long pollingIntervalMs, long operationTimeoutMs, Supplier<BackOff> backOffSupplier, Set<NodeRef> nodes,
                        Identity coIdentity, AdminClientProvider adminClientProvider, KafkaAgentClientProvider kafkaAgentClientProvider,
                        Function<Integer, String> kafkaConfigProvider, KafkaVersion kafkaVersion, boolean allowReconfiguration, KubernetesRestartEventPublisher eventsPublisher) {
+        this(reconciliation, podOperations, pollingIntervalMs, operationTimeoutMs, backOffSupplier, nodes, coIdentity, adminClientProvider,
+                kafkaAgentClientProvider, kafkaConfigProvider, kafkaVersion, allowReconfiguration, eventsPublisher, null);
+    }
+
+    /**
+     * Constructor
+     *
+     * @param reconciliation                Reconciliation marker
+     * @param podOperations                 Pod operator for managing pods
+     * @param pollingIntervalMs             Polling interval in milliseconds
+     * @param operationTimeoutMs            Operation timeout in milliseconds
+     * @param backOffSupplier               Backoff supplier
+     * @param nodes                         List of Kafka node references to consider rolling
+     * @param coIdentity                    Trust set and identity for authentication for connecting to the Kafka cluster
+     * @param adminClientProvider           Kafka Admin client provider
+     * @param kafkaAgentClientProvider      Kafka Agent client provider
+     * @param kafkaConfigProvider           Kafka configuration provider
+     * @param kafkaVersion                  Kafka version
+     * @param allowReconfiguration          Flag indicting whether reconfiguration is allowed or not
+     * @param eventsPublisher               Kubernetes Events publisher for publishing events about pod restarts
+     * @param customListenerCertificates    Desired custom listener certificates or null if they are not known
+     */
+    public KafkaRoller(Reconciliation reconciliation, PodOperator podOperations,
+                       long pollingIntervalMs, long operationTimeoutMs, Supplier<BackOff> backOffSupplier, Set<NodeRef> nodes,
+                       Identity coIdentity, AdminClientProvider adminClientProvider, KafkaAgentClientProvider kafkaAgentClientProvider,
+                       Function<Integer, String> kafkaConfigProvider, KafkaVersion kafkaVersion, boolean allowReconfiguration, KubernetesRestartEventPublisher eventsPublisher,
+                       CustomListenerCertificates customListenerCertificates) {
         this.namespace = reconciliation.namespace();
         this.cluster = reconciliation.name();
         this.nodes = nodes;
@@ -171,6 +204,7 @@ public class KafkaRoller {
         this.kafkaVersion = kafkaVersion;
         this.reconciliation = reconciliation;
         this.allowReconfiguration = allowReconfiguration;
+        this.customListenerCertificates = customListenerCertificates;
     }
 
     private final ScheduledExecutorService singleExecutor = Executors.newSingleThreadScheduledExecutor(
@@ -302,8 +336,10 @@ public class KafkaRoller {
 
         boolean needsRestart;
         boolean needsReconfig;
+        boolean needsCertReload;
         boolean forceRestart;
         boolean podStuck;
+        Config currentConfig;
         KafkaConfigurationDiff configDiff;
         KafkaQuorumCheck quorumCheck;
 
@@ -433,21 +469,34 @@ public class KafkaRoller {
             checkIfRestartOrReconfigureRequired(nodeRef, isController, isBroker, restartContext);
             if (restartContext.forceRestart) {
                 LOGGER.debugCr(reconciliation, "Pod {} can be rolled now", nodeRef);
-                restartAndAwaitReadiness(pod, operationTimeoutMs, restartContext);
-            } else if (restartContext.needsRestart || restartContext.needsReconfig) {
+                restartAndAwaitReadiness(nodeRef, pod, operationTimeoutMs, restartContext);
+            } else if (restartContext.needsRestart || restartContext.needsReconfig || restartContext.needsCertReload) {
                 if (isController && deferController(nodeRef, restartContext)) {
                     LOGGER.debugCr(reconciliation, "Pod {} is the active controller and there are other pods to verify first.", nodeRef);
                     throw new ForceableProblem("Pod " + nodeRef.podName() + " is the active controller and there are other pods to verify first");
-                } else if (!canRoll(nodeRef.nodeId(), isController, isBroker, false, restartContext)) {
-                    LOGGER.debugCr(reconciliation, "Pod {} cannot be updated right now", nodeRef);
-                    throw new UnforceableProblem("Pod " + nodeRef.podName() + " cannot be updated right now.");
-                } else {
-                    // Check for rollability before trying a dynamic update so that if the dynamic update fails we can go to a full restart
-                    if (!maybeDynamicUpdateBrokerConfig(nodeRef, restartContext, isController && !isBroker)) {
-                        LOGGER.infoCr(reconciliation, "Rolling Pod {} due to {}", nodeRef, restartContext.restartReasons.getAllReasonNotes());
-                        restartAndAwaitReadiness(pod, operationTimeoutMs, restartContext);
+                }
+
+                if (restartContext.needsCertReload && !restartContext.needsRestart) {
+                    if (maybeReloadCustomListenerCertificates(nodeRef, pod)) {
+                        restartContext.needsCertReload = false;
                     } else {
-                        awaitReadiness(pod, operationTimeoutMs);
+                        restartContext.needsReconfig = false;
+                        restartContext.needsRestart = true;
+                    }
+                }
+
+                if (restartContext.needsRestart || restartContext.needsReconfig) {
+                    if (!canRoll(nodeRef.nodeId(), isController, isBroker, false, restartContext)) {
+                        LOGGER.debugCr(reconciliation, "Pod {} cannot be updated right now", nodeRef);
+                        throw new UnforceableProblem("Pod " + nodeRef.podName() + " cannot be updated right now.");
+                    } else {
+                        // Check for rollability before trying a dynamic update so that if the dynamic update fails we can go to a full restart
+                        if (!maybeDynamicUpdateBrokerConfig(nodeRef, restartContext, isController && !isBroker)) {
+                            LOGGER.infoCr(reconciliation, "Rolling Pod {} due to {}", nodeRef, restartContext.restartReasons.getAllReasonNotes());
+                            restartAndAwaitReadiness(nodeRef, pod, operationTimeoutMs, restartContext);
+                        } else {
+                            awaitReadiness(pod, operationTimeoutMs);
+                        }
                     }
                 }
             } else {
@@ -471,7 +520,7 @@ public class KafkaRoller {
 
                     LOGGER.warnCr(reconciliation, "Pod {} will be force-rolled, due to error: {}", nodeRef, errorMsg);
                     restartContext.restartReasons.add(RestartReason.POD_FORCE_RESTART_ON_ERROR);
-                    restartAndAwaitReadiness(pod, operationTimeoutMs, restartContext);
+                    restartAndAwaitReadiness(nodeRef, pod, operationTimeoutMs, restartContext);
                 } else {
                     LOGGER.warnCr(reconciliation, "Pod {} can't be safely force-rolled; original error: ", nodeRef, e.getCause() != null ? e.getCause().getMessage() : e.getMessage());
                     throw e;
@@ -556,7 +605,9 @@ public class KafkaRoller {
     private void markRestartContextWithForceRestart(RestartContext restartContext) {
         restartContext.needsRestart = false;
         restartContext.needsReconfig = false;
+        restartContext.needsCertReload = false;
         restartContext.forceRestart = true;
+        restartContext.currentConfig = null;
         restartContext.configDiff = null;
     }
 
@@ -566,7 +617,11 @@ public class KafkaRoller {
     @SuppressWarnings("checkstyle:CyclomaticComplexity")
     private void checkIfRestartOrReconfigureRequired(NodeRef nodeRef, boolean isController, boolean isBroker, RestartContext restartContext) throws ForceableProblem, InterruptedException, FatalProblem {
         RestartReasons reasonToRestartPod = restartContext.restartReasons;
-        if (restartContext.podStuck && !reasonToRestartPod.contains(RestartReason.POD_HAS_OLD_REVISION) && !reasonToRestartPod.contains(RestartReason.POD_HAS_OLD_RESOURCE_REVISION)) {
+        // Custom listener certificates are not part of the pod revision, so their change has to be treated the same way
+        if (restartContext.podStuck
+                && !reasonToRestartPod.contains(RestartReason.POD_HAS_OLD_REVISION)
+                && !reasonToRestartPod.contains(RestartReason.POD_HAS_OLD_RESOURCE_REVISION)
+                && !reasonToRestartPod.contains(RestartReason.CUSTOM_LISTENER_CERTIFICATES_CHANGED)) {
             // If the pod is unschedulable then deleting it, or trying to open an Admin client to it will make no difference
             // Treat this as fatal because if it's not possible to schedule one pod then it's likely that proceeding
             // and deleting a different pod in the meantime will likely result in another unschedulable pod.
@@ -619,6 +674,12 @@ public class KafkaRoller {
             }
         }
 
+        boolean needsCertReload = canReloadCustomListenerCertificates(needsRestart, isBroker, reasonToRestartPod);
+        if (needsCertReload) {
+            LOGGER.debugCr(reconciliation, "Pod {} needs its custom listener certificates to be reloaded.", nodeRef);
+            needsRestart = false;
+        }
+
         if (!needsRestart && allowReconfiguration) {
             LOGGER.traceCr(reconciliation, "Pod {}: description {}", nodeRef, config);
             configDiff = new KafkaConfigurationDiff(reconciliation, config, kafkaConfigProvider.apply(nodeRef.nodeId()), kafkaVersion, nodeRef, isController, isBroker);
@@ -637,8 +698,186 @@ public class KafkaRoller {
 
         restartContext.needsRestart = needsRestart;
         restartContext.needsReconfig = needsReconfig;
+        restartContext.needsCertReload = needsCertReload;
         restartContext.forceRestart = false;
+        restartContext.currentConfig = config;
         restartContext.configDiff = configDiff;
+    }
+
+    /**
+     * Checks whether the only reason to restart the pod is a change of the custom listener certificates and whether
+     * these can be reloaded dynamically instead.
+     *
+     * @param needsRestart  Indicates whether the pod needs to be restarted
+     * @param isBroker      Indicates whether the node has the broker role
+     * @param reasons       Reasons to restart the pod
+     *
+     * @return  True if the custom listener certificates should be reloaded instead of restarting the pod
+     */
+    private boolean canReloadCustomListenerCertificates(boolean needsRestart, boolean isBroker, RestartReasons reasons) {
+        if (!needsRestart || !isBroker || !allowReconfiguration) {
+            return false;
+        }
+
+        return customListenerCertificates != null
+                && customListenerCertificates.reloadEnabled()
+                && !customListenerCertificates.listeners().isEmpty()
+                && reasons.getReasons().equals(Set.of(RestartReason.CUSTOM_LISTENER_CERTIFICATES_CHANGED));
+    }
+
+    /**
+     * Reloads the custom listener certificates of the broker, verifies that the broker serves them and marks the pod
+     * as updated. Returns false if any of these steps fails and the pod should be restarted instead.
+     *
+     * @param nodeRef   Reference of the pod
+     * @param pod       The pod
+     *
+     * @return  True if the certificates were reloaded. False otherwise.
+     *
+     * @throws InterruptedException     Interrupted while waiting.
+     */
+    private boolean maybeReloadCustomListenerCertificates(NodeRef nodeRef, Pod pod) throws InterruptedException {
+        try {
+            LOGGER.debugCr(reconciliation, "Reloading custom listener certificates of pod {}", nodeRef);
+            alterBrokerConfig(nodeRef, CustomListenerCertificateUtils.reloadOps(namespace, nodeRef.podName(), customListenerCertificates.listeners()),
+                    "Error reloading custom listener certificates of pod " + nodeRef);
+            awaitServedCustomListenerCertificates(nodeRef);
+            patchCustomListenerCertificateThumbprints(pod, customListenerCertificates.thumbprints());
+            LOGGER.infoCr(reconciliation, "Custom listener certificates of pod {} were reloaded without restart", nodeRef);
+            return true;
+        } catch (ForceableProblem e) {
+            LOGGER.warnCr(reconciliation, "Failed to reload custom listener certificates of pod {}, will restart it instead", nodeRef, e);
+            return false;
+        }
+    }
+
+    /**
+     * Applies per-broker dynamic configuration updates using the broker Admin client.
+     *
+     * @param nodeRef           Reference of the pod
+     * @param ops               Configuration updates
+     * @param errorMessage      Message used when the update fails
+     *
+     * @throws ForceableProblem         If the broker rejects the configuration (e.g. invalid certificate)
+     * @throws InterruptedException     Interrupted while waiting.
+     */
+    private void alterBrokerConfig(NodeRef nodeRef, List<AlterConfigOp> ops, String errorMessage) throws ForceableProblem, InterruptedException {
+        ConfigResource resource = getBrokersConfig(nodeRef.nodeId());
+        KafkaFuture<Void> future = brokerAdminClient.incrementalAlterConfigs(Map.of(resource, ops)).values().get(resource);
+        if (future != null) {
+            await(future.toCompletionStage(), 30_000, error -> new ForceableProblem(errorMessage, error));
+        }
+    }
+
+    /**
+     * Waits until the broker serves the desired certificates on all custom certificate listeners. The new
+     * configuration is applied by the broker asynchronously, so a successful configuration update alone does not
+     * guarantee that the new certificates are used.
+     *
+     * @param nodeRef   Reference of the pod
+     *
+     * @throws ForceableProblem         If the desired certificates are not served before the timeout
+     * @throws InterruptedException     Interrupted while waiting.
+     */
+    private void awaitServedCustomListenerCertificates(NodeRef nodeRef) throws ForceableProblem, InterruptedException {
+        long deadline = System.currentTimeMillis() + Math.min(CUSTOM_LISTENER_CERTIFICATE_RELOAD_TIMEOUT_MS, operationTimeoutMs);
+
+        for (CustomListenerCertificates.Listener listener : customListenerCertificates.listeners()) {
+            String served = null;
+            ForceableProblem lastProblem = null;
+
+            while (!listener.thumbprint().equals(served)) {
+                if (System.currentTimeMillis() > deadline) {
+                    throw new ForceableProblem("Pod " + nodeRef.podName() + " does not serve the desired certificate " + listener.thumbprint()
+                            + " on listener " + listener.name() + (served != null ? " (served " + served + ")" : ""), lastProblem);
+                }
+
+                try {
+                    served = servedCertificateThumbprint(nodeRef, listener.port());
+                    lastProblem = null;
+                } catch (ForceableProblem e) {
+                    served = null;
+                    lastProblem = e;
+                }
+
+                if (!listener.thumbprint().equals(served)) {
+                    Thread.sleep(pollingIntervalMs);
+                }
+            }
+        }
+    }
+
+    /**
+     * Connects to the listener of the broker and returns the short thumbprint of the certificate it serves. The
+     * certificate is not validated because it is only compared with the desired certificate.
+     *
+     * @param nodeRef   Reference of the pod
+     * @param port      Port of the listener
+     *
+     * @return  Short thumbprint of the served certificate
+     *
+     * @throws ForceableProblem     If the served certificate cannot be retrieved
+     */
+    protected String servedCertificateThumbprint(NodeRef nodeRef, int port) throws ForceableProblem {
+        String host = DnsNameGenerator.podDnsNameWithoutClusterDomain(namespace, KafkaResources.brokersServiceName(cluster), nodeRef.podName());
+
+        try {
+            return CustomListenerCertificateUtils.servedCertificateThumbprint(host, port, CUSTOM_LISTENER_CONNECT_TIMEOUT_MS);
+        } catch (IOException | GeneralSecurityException e) {
+            throw new ForceableProblem("Failed to get the certificate served by pod " + nodeRef.podName() + " on port " + port, e);
+        }
+    }
+
+    /**
+     * Updates the custom listener certificate thumbprints annotation on the pod to mark that it uses the desired
+     * certificates.
+     *
+     * @param pod           The pod
+     * @param thumbprints   Desired value of the annotation
+     *
+     * @throws ForceableProblem     If the pod cannot be updated
+     */
+    protected void patchCustomListenerCertificateThumbprints(Pod pod, String thumbprints) throws ForceableProblem {
+        try {
+            podOperations.client().inNamespace(namespace).withName(pod.getMetadata().getName())
+                    .edit(p -> new PodBuilder(p)
+                            .editMetadata()
+                                .addToAnnotations(KafkaCluster.ANNO_STRIMZI_CUSTOM_LISTENER_CERT_THUMBPRINTS, thumbprints)
+                            .endMetadata()
+                            .build());
+        } catch (KubernetesClientException e) {
+            throw new ForceableProblem("Failed to update custom listener certificate thumbprints of pod " + pod.getMetadata().getName(), e);
+        }
+    }
+
+    /**
+     * Removes the dynamic custom listener certificate configurations of listeners which do not use custom
+     * certificates anymore. These configurations would otherwise point to non-existent keys in the per-node Secret
+     * after the restart. Removing them makes the broker use the certificates it loaded on startup, so it must be
+     * done only right before the restart.
+     *
+     * @param nodeRef           Reference of the pod
+     * @param restartContext    Restart context
+     *
+     * @throws InterruptedException     Interrupted while waiting.
+     */
+    private void maybeRemoveStaleCustomListenerCertificateConfigs(NodeRef nodeRef, RestartContext restartContext) throws InterruptedException {
+        if (customListenerCertificates == null || brokerAdminClient == null || restartContext.currentConfig == null) {
+            return;
+        }
+
+        List<AlterConfigOp> ops = CustomListenerCertificateUtils.staleConfigRemovalOps(restartContext.currentConfig, customListenerCertificates.listeners());
+        if (ops.isEmpty()) {
+            return;
+        }
+
+        LOGGER.infoCr(reconciliation, "Removing stale custom listener certificate configurations of pod {}", nodeRef);
+        try {
+            alterBrokerConfig(nodeRef, ops, "Error removing stale custom listener certificate configurations of pod " + nodeRef);
+        } catch (ForceableProblem e) {
+            // Kafka ignores unresolvable dynamic configurations on startup and uses the static ones, so the restart can proceed
+            LOGGER.warnCr(reconciliation, "Failed to remove stale custom listener certificate configurations of pod {}", nodeRef, e);
+        }
     }
 
     /**
@@ -814,9 +1053,10 @@ public class KafkaRoller {
      * @param timeoutMs         The timeout in milliseconds.
      * @param restartContext    Restart context
      */
-    private void restartAndAwaitReadiness(Pod pod, long timeoutMs, RestartContext restartContext)
+    private void restartAndAwaitReadiness(NodeRef nodeRef, Pod pod, long timeoutMs, RestartContext restartContext)
             throws InterruptedException, UnforceableProblem, FatalProblem {
         String podName = pod.getMetadata().getName();
+        maybeRemoveStaleCustomListenerCertificateConfigs(nodeRef, restartContext);
         LOGGER.debugCr(reconciliation, "Rolling pod {}", podName);
         await(restart(pod, restartContext), timeoutMs, e -> new UnforceableProblem("Error while trying to restart pod " + podName + " to become ready", e));
         awaitReadiness(pod, timeoutMs);

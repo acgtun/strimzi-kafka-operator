@@ -46,6 +46,7 @@ import io.strimzi.operator.cluster.model.RestartReason;
 import io.strimzi.operator.cluster.model.RestartReasons;
 import io.strimzi.operator.cluster.operator.VertxUtil;
 import io.strimzi.operator.cluster.operator.resource.ConcurrentDeletionException;
+import io.strimzi.operator.cluster.operator.resource.CustomListenerCertificates;
 import io.strimzi.operator.cluster.operator.resource.KafkaAgentClientProvider;
 import io.strimzi.operator.cluster.operator.resource.KafkaRoller;
 import io.strimzi.operator.cluster.operator.resource.ResourceOperatorSupplier;
@@ -94,6 +95,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -119,6 +121,7 @@ public class KafkaReconciler {
     private final long operationTimeoutMs;
     private final boolean isNetworkPolicyGeneration;
     private final boolean isPodDisruptionBudgetGeneration;
+    private final boolean isDynamicCertificateReloadEnabled;
     private final List<String> maintenanceWindows;
     private final String operatorNamespace;
     private final Labels operatorNamespaceLabels;
@@ -214,6 +217,7 @@ public class KafkaReconciler {
         this.imagePullPolicy = config.getImagePullPolicy();
         this.imagePullSecrets = config.getImagePullSecrets();
         this.isPodDisruptionBudgetGeneration = config.isPodDisruptionBudgetGeneration();
+        this.isDynamicCertificateReloadEnabled = config.featureGates().dynamicCertificateReloadEnabled();
         this.kafkaAutoRebalanceStatus = kafkaCr.getStatus() != null ? kafkaCr.getStatus().getAutoRebalance() : null;
 
         this.strimziPodSetOperator = supplier.strimziPodSetOperator;
@@ -353,7 +357,7 @@ public class KafkaReconciler {
      */
     protected Future<Void> networkPolicy() {
         if (isNetworkPolicyGeneration) {
-            return VertxUtil.toFuture(networkPolicyOperator.reconcile(reconciliation, reconciliation.namespace(), KafkaResources.kafkaNetworkPolicyName(reconciliation.name()), kafka.generateNetworkPolicy(operatorNamespace, operatorNamespaceLabels)))
+            return VertxUtil.toFuture(networkPolicyOperator.reconcile(reconciliation, reconciliation.namespace(), KafkaResources.kafkaNetworkPolicyName(reconciliation.name()), kafka.generateNetworkPolicy(operatorNamespace, operatorNamespaceLabels, isDynamicCertificateReloadEnabled)))
                     .mapEmpty();
         } else {
             return Future.succeededFuture();
@@ -484,11 +488,34 @@ public class KafkaReconciler {
                     this.coIdentity,
                     adminClientProvider,
                     kafkaAgentClientProvider,
-                    brokerId -> kafka.generatePerBrokerConfiguration(brokerId, kafkaAdvertisedHostnames, kafkaAdvertisedPorts, scalingDownBlockedNodes.contains(brokerId)),
+                    brokerId -> kafka.generatePerBrokerConfiguration(brokerId, kafkaAdvertisedHostnames, kafkaAdvertisedPorts, scalingDownBlockedNodes.contains(brokerId), isDynamicCertificateReloadEnabled),
                     kafka.getKafkaVersion(),
                     allowReconfiguration,
-                    eventsPublisher
+                    eventsPublisher,
+                    customListenerCertificates()
             ).rollingRestart(podNeedsRestart));
+    }
+
+    /**
+     * Collects the desired custom listener certificates for the KafkaRoller.
+     *
+     * @return  Desired custom listener certificates or null if the listeners were not reconciled yet
+     */
+    private CustomListenerCertificates customListenerCertificates() {
+        if (listenerReconciliationResults == null) {
+            return null;
+        }
+
+        Map<String, String> thumbprints = listenerReconciliationResults.customListenerCertificateThumbprints;
+        List<CustomListenerCertificates.Listener> listeners = kafka.getListeners().stream()
+                .filter(listener -> thumbprints.containsKey(listener.getName()))
+                .map(listener -> new CustomListenerCertificates.Listener(
+                        ListenersUtils.identifier(listener).toLowerCase(Locale.ENGLISH),
+                        listener.getPort(),
+                        thumbprints.get(listener.getName())))
+                .toList();
+
+        return new CustomListenerCertificates(isDynamicCertificateReloadEnabled, listeners, thumbprints.toString());
     }
 
     /**
@@ -688,7 +715,7 @@ public class KafkaReconciler {
     protected Future<Void> perBrokerKafkaConfiguration(MetricsAndLogging metricsAndLogging) {
         return VertxUtil.toFuture(configMapOperator.listAsync(reconciliation.namespace(), kafka.getSelectorLabels()))
                 .compose(existingConfigMaps -> {
-                    List<ConfigMap> desiredConfigMaps = kafka.generatePerBrokerConfigurationConfigMaps(metricsAndLogging, listenerReconciliationResults.advertisedHostnames, listenerReconciliationResults.advertisedPorts, scalingDownBlockedNodes);
+                    List<ConfigMap> desiredConfigMaps = kafka.generatePerBrokerConfigurationConfigMaps(metricsAndLogging, listenerReconciliationResults.advertisedHostnames, listenerReconciliationResults.advertisedPorts, scalingDownBlockedNodes, isDynamicCertificateReloadEnabled);
                     List<Future<?>> ops = new ArrayList<>();
 
                     // Delete all existing ConfigMaps which are not desired and are not the shared config map

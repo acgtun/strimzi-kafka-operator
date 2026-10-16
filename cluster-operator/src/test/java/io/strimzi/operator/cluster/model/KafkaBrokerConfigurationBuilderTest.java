@@ -1566,7 +1566,7 @@ public class KafkaBrokerConfigurationBuilderTest {
                 .build();
 
         String configuration = new KafkaBrokerConfigurationBuilder(Reconciliation.DUMMY_RECONCILIATION, NODE_REF, KafkaClusterSecurityContext.DEFAULT_KAFKA_CLUSTER_SECURITY_CONTEXT)
-                .withListeners("my-cluster", "my-namespace", singletonList(listener), listenerId -> "dummy-advertised-address", listenerId -> "1919")
+                .withListeners("my-cluster", "my-namespace", singletonList(listener), listenerId -> "dummy-advertised-address", listenerId -> "1919", true)
                 .build();
 
         assertThat(configuration, isEquivalent("node.id=2",
@@ -1590,7 +1590,9 @@ public class KafkaBrokerConfigurationBuilderTest {
                 "ssl.endpoint.identification.algorithm=HTTPS",
                 "listener.name.external-9094.ssl.keystore.certificate.chain=${strimzisecrets:namespace/my-cluster-kafka-2:external-9094.crt}",
                 "listener.name.external-9094.ssl.keystore.key=${strimzisecrets:namespace/my-cluster-kafka-2:external-9094.key}",
-                "listener.name.external-9094.ssl.keystore.type=PEM"));
+                "listener.name.external-9094.ssl.keystore.type=PEM",
+                "listener.name.external-9094.ssl.allow.dn.changes=true",
+                "listener.name.external-9094.ssl.allow.san.changes=true"));
     }
 
     @Test
