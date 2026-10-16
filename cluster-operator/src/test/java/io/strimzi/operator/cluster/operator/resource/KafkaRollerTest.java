@@ -73,6 +73,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+@SuppressWarnings("checkstyle:ClassDataAbstractionCoupling")
 public class KafkaRollerTest {
 
     private static final int REPLICAS = 5;
@@ -885,6 +886,95 @@ public class KafkaRollerTest {
             }).toCompletableFuture().join();
     }
 
+    private static final CustomListenerCertificates CUSTOM_CERTS = new CustomListenerCertificates(true,
+            List.of(new CustomListenerCertificates.Listener("custom-9094", 9094, "abcd1234")), "{custom=abcd1234}");
+
+    private TestingKafkaRoller rollerWithCustomCertificates(Set<NodeRef> nodes, CustomListenerCertificates customCerts, Function<Integer, String> servedThumbprints) {
+        return new TestingKafkaRoller(nodes, mockPodOps(podId -> CompletableFuture.completedFuture(null)),
+                noException(), null, noException(), noException(),
+                brokerId -> CompletableFuture.completedFuture(true),
+                new DefaultAdminClientProvider(), new DefaultKafkaAgentClientProvider(), false, null, -1,
+                customCerts, servedThumbprints);
+    }
+
+    @Test
+    public void testCustomListenerCertificatesReloadedWithoutRestart() {
+        TestingKafkaRoller kafkaRoller = rollerWithCustomCertificates(addPodNames(3, 0, 0), CUSTOM_CERTS, podId -> "abcd1234");
+
+        kafkaRoller.rollingRestart(pod -> RestartReasons.of(RestartReason.CUSTOM_LISTENER_CERTIFICATES_CHANGED))
+                .toCompletableFuture().join();
+
+        assertThat(restarted(), is(emptyList()));
+        assertThat(kafkaRoller.patchedThumbprints, is(List.of("c-kafka-0={custom=abcd1234}", "c-kafka-1={custom=abcd1234}", "c-kafka-2={custom=abcd1234}")));
+        assertNoUnclosedAdminClient(kafkaRoller);
+    }
+
+    @Test
+    public void testCustomListenerCertificatesRestartWhenReloadDisabled() {
+        CustomListenerCertificates disabled = new CustomListenerCertificates(false, CUSTOM_CERTS.listeners(), CUSTOM_CERTS.thumbprints());
+        TestingKafkaRoller kafkaRoller = rollerWithCustomCertificates(addPodNames(3, 0, 0), disabled, podId -> "abcd1234");
+
+        kafkaRoller.rollingRestart(pod -> RestartReasons.of(RestartReason.CUSTOM_LISTENER_CERTIFICATES_CHANGED))
+                .toCompletableFuture().join();
+
+        assertThat(restarted(), is(asList(0, 1, 2)));
+        assertThat(kafkaRoller.patchedThumbprints, is(emptyList()));
+        assertNoUnclosedAdminClient(kafkaRoller);
+    }
+
+    @Test
+    public void testCustomListenerCertificatesRestartWithOtherRestartReasons() {
+        TestingKafkaRoller kafkaRoller = rollerWithCustomCertificates(addPodNames(3, 0, 0), CUSTOM_CERTS, podId -> "abcd1234");
+
+        kafkaRoller.rollingRestart(pod -> {
+            RestartReasons reasons = RestartReasons.of(RestartReason.CUSTOM_LISTENER_CERTIFICATES_CHANGED);
+            if (podName2Number(pod.getMetadata().getName()) == 1) {
+                reasons.add(RestartReason.POD_HAS_OLD_REVISION);
+            }
+            return reasons;
+        }).toCompletableFuture().join();
+
+        assertThat(restarted(), is(singletonList(1)));
+        assertThat(kafkaRoller.patchedThumbprints, is(List.of("c-kafka-0={custom=abcd1234}", "c-kafka-2={custom=abcd1234}")));
+        assertNoUnclosedAdminClient(kafkaRoller);
+    }
+
+    @Test
+    public void testCustomListenerCertificatesRestartWhenOldCertificateServed() {
+        TestingKafkaRoller kafkaRoller = rollerWithCustomCertificates(addPodNames(3, 0, 0), CUSTOM_CERTS, podId -> podId == 2 ? "00000000" : "abcd1234");
+
+        kafkaRoller.rollingRestart(pod -> RestartReasons.of(RestartReason.CUSTOM_LISTENER_CERTIFICATES_CHANGED))
+                .toCompletableFuture().join();
+
+        assertThat(restarted(), is(singletonList(2)));
+        assertThat(kafkaRoller.patchedThumbprints, is(List.of("c-kafka-0={custom=abcd1234}", "c-kafka-1={custom=abcd1234}")));
+        assertNoUnclosedAdminClient(kafkaRoller);
+    }
+
+    @Test
+    public void testCustomListenerCertificatesRestartWhenListenerUnreachable() {
+        TestingKafkaRoller kafkaRoller = rollerWithCustomCertificates(addPodNames(3, 0, 0), CUSTOM_CERTS, podId -> podId == 0 ? null : "abcd1234");
+
+        kafkaRoller.rollingRestart(pod -> RestartReasons.of(RestartReason.CUSTOM_LISTENER_CERTIFICATES_CHANGED))
+                .toCompletableFuture().join();
+
+        assertThat(restarted(), is(singletonList(0)));
+        assertThat(kafkaRoller.patchedThumbprints, is(List.of("c-kafka-1={custom=abcd1234}", "c-kafka-2={custom=abcd1234}")));
+        assertNoUnclosedAdminClient(kafkaRoller);
+    }
+
+    @Test
+    public void testCustomListenerCertificatesRestartControllers() {
+        TestingKafkaRoller kafkaRoller = rollerWithCustomCertificates(addPodNames(0, 0, 3), CUSTOM_CERTS, podId -> "abcd1234");
+
+        kafkaRoller.rollingRestart(pod -> RestartReasons.of(RestartReason.CUSTOM_LISTENER_CERTIFICATES_CHANGED))
+                .toCompletableFuture().join();
+
+        assertThat(restarted(), is(asList(0, 1, 2)));
+        assertThat(kafkaRoller.patchedThumbprints, is(emptyList()));
+        assertNoUnclosedAdminClient(kafkaRoller);
+    }
+
     private TestingKafkaRoller rollerWithActiveController(PodOperator podOps, Set<NodeRef> nodes, int activeController) {
         return new TestingKafkaRoller(nodes, podOps,
                 noException(), null, noException(), noException(),
@@ -1031,6 +1121,8 @@ public class KafkaRollerTest {
         private final boolean delegateAdminClientCall;
         private final int activeController;
         private final BrokerState brokerState;
+        private final Function<Integer, String> servedThumbprints;
+        private final List<String> patchedThumbprints = new ArrayList<>();
 
         @SuppressWarnings("checkstyle:ParameterNumber")
         private TestingKafkaRoller(Set<NodeRef> nodes,
@@ -1043,6 +1135,22 @@ public class KafkaRollerTest {
                                    AdminClientProvider adminClientProvider,
                                    KafkaAgentClientProvider kafkaAgentClientProvider,
                                    boolean delegateAdminClientCall, BrokerState brokerState, int activeController) {
+            this(nodes, podOps, acOpenException, acCloseException, controllerException, getConfigsException, canRollFn, adminClientProvider,
+                    kafkaAgentClientProvider, delegateAdminClientCall, brokerState, activeController, null, podId -> null);
+        }
+
+        @SuppressWarnings("checkstyle:ParameterNumber")
+        private TestingKafkaRoller(Set<NodeRef> nodes,
+                                   PodOperator podOps,
+                                   Function<Set<NodeRef>, RuntimeException> acOpenException,
+                                   Throwable acCloseException,
+                                   Function<Integer, Throwable> controllerException,
+                                   Function<Integer, ForceableProblem> getConfigsException,
+                                   Function<Integer, CompletableFuture<Boolean>> canRollFn,
+                                   AdminClientProvider adminClientProvider,
+                                   KafkaAgentClientProvider kafkaAgentClientProvider,
+                                   boolean delegateAdminClientCall, BrokerState brokerState, int activeController,
+                                   CustomListenerCertificates customListenerCertificates, Function<Integer, String> servedThumbprints) {
             super(
                     new Reconciliation("test", "Kafka", stsNamespace(), clusterName()),
                     podOps,
@@ -1056,7 +1164,9 @@ public class KafkaRollerTest {
                     brokerId -> "compression.type=gzip",
                     KafkaVersionTestUtils.getLatestVersion(),
                     true,
-                    mock(KubernetesRestartEventPublisher.class));
+                    mock(KubernetesRestartEventPublisher.class),
+                    customListenerCertificates);
+            this.servedThumbprints = servedThumbprints;
             this.delegateAdminClientCall = delegateAdminClientCall;
             this.activeController = activeController;
             this.controllerCall = 0;
@@ -1173,6 +1283,20 @@ public class KafkaRollerTest {
         protected CompletableFuture<Void> restart(Pod pod, RestartContext restartContext) {
             restarted.add(pod.getMetadata().getName());
             return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        protected String servedCertificateThumbprint(NodeRef nodeRef, int port) throws ForceableProblem {
+            String thumbprint = servedThumbprints.apply(nodeRef.nodeId());
+            if (thumbprint == null) {
+                throw new ForceableProblem("Failed to connect to pod " + nodeRef.podName());
+            }
+            return thumbprint;
+        }
+
+        @Override
+        protected void patchCustomListenerCertificateThumbprints(Pod pod, String thumbprints) {
+            patchedThumbprints.add(pod.getMetadata().getName() + "=" + thumbprints);
         }
     }
 }

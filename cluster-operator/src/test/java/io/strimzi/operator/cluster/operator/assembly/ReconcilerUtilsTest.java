@@ -33,9 +33,11 @@ import io.strimzi.api.kafka.model.podset.StrimziPodSet;
 import io.strimzi.api.kafka.model.podset.StrimziPodSetBuilder;
 import io.strimzi.operator.cluster.ResourceUtils;
 import io.strimzi.operator.cluster.auth.RequestedServiceAccountAuthIdentity;
+import io.strimzi.operator.cluster.model.KafkaCluster;
 import io.strimzi.operator.cluster.model.NodeRef;
 import io.strimzi.operator.cluster.model.PodRevision;
 import io.strimzi.operator.cluster.model.PodSetUtils;
+import io.strimzi.operator.cluster.model.RestartReason;
 import io.strimzi.operator.cluster.model.clustersecurity.kafka.AuthenticationConfiguration;
 import io.strimzi.operator.cluster.model.clustersecurity.kafka.KafkaClusterSecurityContext;
 import io.strimzi.operator.cluster.model.clustersecurity.kafka.NoneAuthenticationConfiguration;
@@ -841,6 +843,34 @@ public class ReconcilerUtilsTest {
 
         assertThat(ReconcilerUtils.reasonsToRestartPod(Reconciliation.DUMMY_RECONCILIATION, podSet, pod1, Set.of(), false).shouldRestart(), is(false));
         assertThat(ReconcilerUtils.reasonsToRestartPod(Reconciliation.DUMMY_RECONCILIATION, podSet, pod2, Set.of(), false).shouldRestart(), is(false));
+    }
+
+    @Test
+    public void testReasonsToRestartPodWithChangedCustomListenerCertificates() {
+        Pod desiredPod = new PodBuilder()
+                .withNewMetadata()
+                    .withName("name")
+                    .withAnnotations(Map.of(PodRevision.STRIMZI_REVISION_ANNOTATION, "avfc1874", KafkaCluster.ANNO_STRIMZI_CUSTOM_LISTENER_CERT_THUMBPRINTS, "{external=bbbbbbbb}"))
+                .endMetadata()
+                .build();
+        Pod currentPod = new PodBuilder(desiredPod)
+                .editMetadata()
+                    .withAnnotations(Map.of(PodRevision.STRIMZI_REVISION_ANNOTATION, "avfc1874", KafkaCluster.ANNO_STRIMZI_CUSTOM_LISTENER_CERT_THUMBPRINTS, "{external=aaaaaaaa}"))
+                .endMetadata()
+                .build();
+
+        StrimziPodSet podSet = new StrimziPodSetBuilder()
+                .withNewMetadata()
+                    .withName("name")
+                .endMetadata()
+                .withNewSpec()
+                    .withPods(PodSetUtils.podToMap(desiredPod))
+                .endSpec()
+                .build();
+
+        assertThat(ReconcilerUtils.reasonsToRestartPod(Reconciliation.DUMMY_RECONCILIATION, podSet, desiredPod, Set.of(), false).shouldRestart(), is(false));
+        assertThat(ReconcilerUtils.reasonsToRestartPod(Reconciliation.DUMMY_RECONCILIATION, podSet, currentPod, Set.of(), false).getReasons(),
+                is(Set.of(RestartReason.CUSTOM_LISTENER_CERTIFICATES_CHANGED)));
     }
 
     @Test

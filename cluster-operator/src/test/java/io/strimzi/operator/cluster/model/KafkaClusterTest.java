@@ -1032,6 +1032,65 @@ public class KafkaClusterTest {
     }
 
     @Test
+    public void testNetworkPolicyPeersWithCustomCertificates() {
+        NetworkPolicyPeer peer1 = new NetworkPolicyPeerBuilder()
+                .withNewPodSelector()
+                    .withMatchExpressions(new LabelSelectorRequirementBuilder().withKey("my-key1").withValues("my-value1").build())
+                .endPodSelector()
+                .build();
+
+        Kafka kafkaAssembly = new KafkaBuilder(KAFKA)
+                .editSpec()
+                    .editKafka()
+                        .withListeners(new GenericKafkaListenerBuilder()
+                                    .withName("tls")
+                                    .withPort(9093)
+                                    .withType(KafkaListenerType.INTERNAL)
+                                    .withTls(true)
+                                    .withNetworkPolicyPeers(peer1)
+                                    .withNewConfiguration()
+                                        .withNewBrokerCertChainAndKey()
+                                            .withSecretName("my-secret")
+                                            .withCertificate("my.crt")
+                                            .withKey("my.key")
+                                        .endBrokerCertChainAndKey()
+                                    .endConfiguration()
+                                    .build(),
+                                new GenericKafkaListenerBuilder()
+                                    .withName("external")
+                                    .withPort(9094)
+                                    .withType(KafkaListenerType.ROUTE)
+                                    .withTls(true)
+                                    .withNewConfiguration()
+                                        .withNewBrokerCertChainAndKey()
+                                            .withSecretName("my-secret")
+                                            .withCertificate("my.crt")
+                                            .withKey("my.key")
+                                        .endBrokerCertChainAndKey()
+                                    .endConfiguration()
+                                    .build())
+                    .endKafka()
+                .endSpec()
+                .build();
+        List<KafkaPool> pools = NodePoolUtils.createKafkaPools(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, List.of(POOL_CONTROLLERS, POOL_MIXED, POOL_BROKERS), Map.of(), KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, SHARED_ENV_PROVIDER);
+        KafkaCluster kc = KafkaCluster.fromCrd(Reconciliation.DUMMY_RECONCILIATION, kafkaAssembly, pools, VERSIONS, KafkaVersionTestUtils.DEFAULT_KRAFT_VERSION_CHANGE, null, SHARED_ENV_PROVIDER, KafkaClusterSecurityContext.DEFAULT_KAFKA_CLUSTER_SECURITY_CONTEXT);
+
+        NetworkPolicy np = kc.generateNetworkPolicy(null, null);
+
+        // The operator is added to the user-configured peers
+        List<NetworkPolicyIngressRule> rules = np.getSpec().getIngress().stream().filter(ing -> ing.getPorts().get(0).getPort().equals(new IntOrString(9093))).collect(Collectors.toList());
+        assertThat(rules.size(), is(1));
+        assertThat(rules.get(0).getFrom().size(), is(2));
+        assertThat(rules.get(0).getFrom().get(0), is(peer1));
+        assertThat(rules.get(0).getFrom().get(1).getPodSelector().getMatchLabels(), is(Map.of(Labels.STRIMZI_KIND_LABEL, "cluster-operator")));
+
+        // Listeners without peers stay open for all
+        rules = np.getSpec().getIngress().stream().filter(ing -> ing.getPorts().get(0).getPort().equals(new IntOrString(9094))).collect(Collectors.toList());
+        assertThat(rules.size(), is(1));
+        assertThat(rules.get(0).getFrom(), is(nullValue()));
+    }
+
+    @Test
     public void testNoNetworkPolicyPeers() {
         Kafka kafkaAssembly = new KafkaBuilder(KAFKA)
                 .editSpec()

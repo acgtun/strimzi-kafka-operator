@@ -1769,9 +1769,17 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
         // KafkaAgent listener is used by our own tool => Operators
         rules.add(NetworkPolicyUtils.createIngressRule(KAFKA_AGENT_PORT, List.of(clusterOperatorPeer)));
 
-        // User-configured listeners are by default open for all. Users can pass peers in the Kafka CR.
+        // User-configured listeners are by default open for all. Users can pass peers in the Kafka CR. The operator
+        // needs access to listeners with custom certificates to verify that the brokers serve the right certificates.
         for (GenericKafkaListener listener : listeners) {
-            rules.add(NetworkPolicyUtils.createIngressRule(listener.getPort(), listener.getNetworkPolicyPeers()));
+            List<NetworkPolicyPeer> peers = listener.getNetworkPolicyPeers();
+
+            if (peers != null && !peers.isEmpty() && hasCustomCertificate(listener)) {
+                peers = new ArrayList<>(peers);
+                peers.add(clusterOperatorPeer);
+            }
+
+            rules.add(NetworkPolicyUtils.createIngressRule(listener.getPort(), peers));
         }
 
         // The Metrics port (if enabled) is opened to all by default
@@ -1790,6 +1798,12 @@ public class KafkaCluster extends AbstractModel implements SupportsMetrics, Supp
                 ownerReference,
                 rules
         );
+    }
+
+    private static boolean hasCustomCertificate(GenericKafkaListener listener) {
+        return listener.isTls()
+                && listener.getConfiguration() != null
+                && listener.getConfiguration().getBrokerCertChainAndKey() != null;
     }
 
     /**

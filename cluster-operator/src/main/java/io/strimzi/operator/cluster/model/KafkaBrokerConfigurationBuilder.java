@@ -493,8 +493,8 @@ public class KafkaBrokerConfigurationBuilder {
         String certConfigProviderValue;
         String keyConfigProviderValue;
         if (customServerCertificate != null)  {
-            certConfigProviderValue = String.format(PLACEHOLDER_SECRET_TEMPLATE_KUBE_CONFIG_PROVIDER, reconciliation.namespace(), node.podName(), listenerNameInProperty + ".crt");
-            keyConfigProviderValue = String.format(PLACEHOLDER_SECRET_TEMPLATE_KUBE_CONFIG_PROVIDER, reconciliation.namespace(), node.podName(), listenerNameInProperty + ".key");
+            certConfigProviderValue = nodeSecretPlaceholder(reconciliation.namespace(), node.podName(), listenerNameInProperty + ".crt");
+            keyConfigProviderValue = nodeSecretPlaceholder(reconciliation.namespace(), node.podName(), listenerNameInProperty + ".key");
         } else {
             certConfigProviderValue = String.format(PLACEHOLDER_SECRET_TEMPLATE_KUBE_CONFIG_PROVIDER, reconciliation.namespace(), node.podName(), node.podName() + ".crt");
             keyConfigProviderValue = String.format(PLACEHOLDER_SECRET_TEMPLATE_KUBE_CONFIG_PROVIDER, reconciliation.namespace(), node.podName(), node.podName() + ".key");
@@ -502,7 +502,29 @@ public class KafkaBrokerConfigurationBuilder {
         writer.println(String.format("listener.name.%s.ssl.keystore.certificate.chain=%s", listenerNameInProperty, certConfigProviderValue));
         writer.println(String.format("listener.name.%s.ssl.keystore.key=%s", listenerNameInProperty, keyConfigProviderValue));
         writer.println(String.format("listener.name.%s.ssl.keystore.type=PEM", listenerNameInProperty));
+
+        if (customServerCertificate != null)  {
+            // Custom certificates can be reloaded dynamically and the new certificate might have a different subject
+            // or SANs. These options are read by Kafka only from the static configuration.
+            writer.println(String.format("listener.name.%s.ssl.allow.dn.changes=true", listenerNameInProperty));
+            writer.println(String.format("listener.name.%s.ssl.allow.san.changes=true", listenerNameInProperty));
+        }
+
         writer.println();
+    }
+
+    /**
+     * Generates the configuration provider placeholder for a key from the per-node Secret. It is used for the custom
+     * listener certificates in the broker configuration as well as when they are reloaded dynamically.
+     *
+     * @param namespace     Namespace of the Kafka cluster
+     * @param podName       Name of the Kafka pod (which is also the name of its per-node Secret)
+     * @param key           Key in the per-node Secret
+     *
+     * @return  The configuration provider placeholder
+     */
+    public static String nodeSecretPlaceholder(String namespace, String podName, String key) {
+        return String.format(PLACEHOLDER_SECRET_TEMPLATE_KUBE_CONFIG_PROVIDER, namespace, podName, key);
     }
 
     /**

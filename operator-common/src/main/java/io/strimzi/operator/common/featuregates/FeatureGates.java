@@ -25,9 +25,13 @@ public class FeatureGates {
     // Enables background deletion propagation when rolling pods
     private static final String USE_BACKGROUND_POD_DELETION = "UseBackgroundPodDeletion";
 
+    // Enables reloading of custom listener certificates without rolling the Kafka brokers
+    private static final String DYNAMIC_CERTIFICATE_RELOAD = "DynamicCertificateReload";
+
     // When adding new feature gates, do not forget to add them to allFeatureGates(), toString(), equals(), and `hashCode() methods
     // private final FeatureGate dummyFeatureGate = new FeatureGate(DUMMY_FEATURE_GATE, false);
     private final FeatureGate useBackgroundPodDeletion = new FeatureGate(USE_BACKGROUND_POD_DELETION, true);
+    private final FeatureGate dynamicCertificateReload = new FeatureGate(DYNAMIC_CERTIFICATE_RELOAD, false);
 
     /**
      * Constructs the feature gates configuration.
@@ -54,6 +58,9 @@ public class FeatureGates {
     //                    break;
                     case USE_BACKGROUND_POD_DELETION:
                         setValueOnlyOnce(useBackgroundPodDeletion, value);
+                        break;
+                    case DYNAMIC_CERTIFICATE_RELOAD:
+                        setValueOnlyOnce(dynamicCertificateReload, value);
                         break;
                     default:
                         throw new InvalidConfigurationException("Unknown feature gate " + featureGate + " found in the configuration");
@@ -102,6 +109,15 @@ public class FeatureGates {
     }
 
     /**
+     * Checks if the DynamicCertificateReload feature gate is enabled.
+     *
+     * @return  Returns true when the DynamicCertificateReload feature gate is enabled
+     */
+    public boolean dynamicCertificateReloadEnabled() {
+        return dynamicCertificateReload.isEnabled();
+    }
+
+    /**
      * Returns a list of all Feature gates. Used for testing.
      *
      * @return  List of all Feature Gates
@@ -109,7 +125,8 @@ public class FeatureGates {
     /*test*/ List<FeatureGate> allFeatureGates()  {
         return List.of(
         //  dummyFeatureGate
-            useBackgroundPodDeletion
+            useBackgroundPodDeletion,
+            dynamicCertificateReload
         );
     }
 
@@ -117,7 +134,8 @@ public class FeatureGates {
     public String toString() {
         return "FeatureGates(" +
     //      "DummyFeatureGate=" + dummyFeatureGate.isEnabled() +
-            "UseBackgroundPodDeletion=" + useBackgroundPodDeletion.isEnabled() +
+            "UseBackgroundPodDeletion=" + useBackgroundPodDeletion.isEnabled() + "," +
+            "DynamicCertificateReload=" + dynamicCertificateReload.isEnabled() +
             ")";
     }
 
@@ -152,13 +170,14 @@ public class FeatureGates {
         } else {
             FeatureGates other = (FeatureGates) o;
             // return Objects.equals(dummyFeatureGate, other.dummyFeatureGate)
-            return Objects.equals(useBackgroundPodDeletion, other.useBackgroundPodDeletion);
+            return Objects.equals(useBackgroundPodDeletion, other.useBackgroundPodDeletion)
+                    && Objects.equals(dynamicCertificateReload, other.dynamicCertificateReload);
         }
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(useBackgroundPodDeletion);
+        return Objects.hash(useBackgroundPodDeletion, dynamicCertificateReload);
     }
 
     /**

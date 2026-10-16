@@ -81,7 +81,12 @@ public enum RestartReason {
     /**
      * Kafka TLS certificates changed
      */
-    KAFKA_CERTIFICATES_CHANGED("Kafka broker TLS certificates updated");
+    KAFKA_CERTIFICATES_CHANGED("Kafka broker TLS certificates updated"),
+
+    /**
+     * Custom listener certificates changed
+     */
+    CUSTOM_LISTENER_CERTIFICATES_CHANGED("Custom listener certificates updated");
 
     //Used in logging and Kubernetes event notes
     private final String defaultNote;
