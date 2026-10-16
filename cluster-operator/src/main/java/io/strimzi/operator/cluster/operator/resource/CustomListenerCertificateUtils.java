@@ -26,7 +26,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
 /**
@@ -85,7 +84,8 @@ final class CustomListenerCertificateUtils {
 
     /**
      * Connects to a TLS listener and returns the short thumbprint of the certificate it serves. The certificate is
-     * not validated because it is only compared with the desired certificate.
+     * not validated because it is only compared with the desired certificate. The TLS handshake has to complete, which
+     * proves that the listener holds the private key matching the served certificate.
      *
      * @param host          Hostname of the broker
      * @param port          Port of the listener
@@ -93,13 +93,12 @@ final class CustomListenerCertificateUtils {
      *
      * @return  Short thumbprint of the served certificate
      *
-     * @throws IOException                  If the served certificate cannot be retrieved
+     * @throws IOException                  If the TLS handshake with the listener fails
      * @throws GeneralSecurityException     If the TLS context cannot be initialized or the thumbprint computed
      */
     @SuppressFBWarnings(value = "WEAK_TRUST_MANAGER", justification = "Only the served certificate is read, no data is exchanged")
     static String servedCertificateThumbprint(String host, int port, int timeoutMs) throws IOException, GeneralSecurityException {
-        AtomicReference<X509Certificate> served = new AtomicReference<>();
-        TrustManager capturingTrustManager = new X509TrustManager() {
+        TrustManager trustAllManager = new X509TrustManager() {
             @Override
             public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
                 throw new CertificateException("Client certificates are not supported");
@@ -107,7 +106,7 @@ final class CustomListenerCertificateUtils {
 
             @Override
             public void checkServerTrusted(X509Certificate[] chain, String authType) {
-                served.set(chain[0]);
+                // The served certificate is compared with the desired certificate after the handshake
             }
 
             @Override
@@ -117,20 +116,16 @@ final class CustomListenerCertificateUtils {
         };
 
         SSLContext sslContext = SSLContext.getInstance("TLS");
-        sslContext.init(null, new TrustManager[] {capturingTrustManager}, null);
+        sslContext.init(null, new TrustManager[] {trustAllManager}, null);
 
         try (SSLSocket socket = (SSLSocket) sslContext.getSocketFactory().createSocket()) {
             socket.connect(new InetSocketAddress(host, port), timeoutMs);
             socket.setSoTimeout(timeoutMs);
             socket.startHandshake();
-        } catch (IOException e) {
-            // Listeners with TLS client authentication fail the handshake after sending their certificate
-            if (served.get() == null) {
-                throw e;
-            }
-        }
 
-        return CertificateUtils.getCertificateThumbprint(served.get()).substring(0, Util.HASH_STUB_LENGTH);
+            // With TLS 1.3, listeners with TLS client authentication reject the missing client certificate only after the handshake
+            return CertificateUtils.getCertificateThumbprint((X509Certificate) socket.getSession().getPeerCertificates()[0]).substring(0, Util.HASH_STUB_LENGTH);
+        }
     }
 
     private static String keystoreConfig(String listenerName, String option) {

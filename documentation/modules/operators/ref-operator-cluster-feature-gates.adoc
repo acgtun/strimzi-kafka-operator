@@ -154,7 +154,8 @@ The `DynamicCertificateReload` feature gate has a default state of _disabled_.
 
 When enabled, the Cluster Operator reloads custom listener certificates, configured using the `brokerCertChainAndKey` property, without restarting the Kafka brokers.
 When the certificate in the custom certificate secret changes, the Cluster Operator updates the per-broker dynamic configuration of the affected listeners, which makes the brokers load the new certificate.
-The Cluster Operator then connects to each listener to verify that the broker serves the new certificate.
+The Cluster Operator then connects to each listener to verify that the broker serves the new certificate and completes a TLS handshake with it.
+For listeners with TLS client authentication, the verification requires TLS 1.3.
 
 If the certificate change is not the only reason to restart a broker, or if the reload or its verification fails, the Cluster Operator restarts the broker as it does when the feature gate is disabled.
 Pods that have only the controller role are always restarted.
